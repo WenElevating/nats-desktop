@@ -3,7 +3,7 @@
 package appdir
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -29,7 +29,7 @@ func LogsDir() (string, error) {
 	}
 	dir = filepath.Join(dir, "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", errors.New("logs dir: " + err.Error())
+		return "", fmt.Errorf("logs dir: %w", err)
 	}
 	return dir, nil
 }
