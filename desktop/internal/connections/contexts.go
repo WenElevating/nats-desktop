@@ -136,6 +136,12 @@ func formOptions(f ContextForm) []natscontext.Option {
 	set(f.ColorScheme, natscontext.WithColorScheme)
 	set(f.Description, natscontext.WithDescription)
 
+	// LIMITATION (M1): a false TLSFirst is indistinguishable from
+	// "unset" — empty and false both skip the Option, so an edit cannot
+	// clear a stored tls_first=true; the loaded value always wins when
+	// the form leaves it false. Clearing it requires a tri-state "unset"
+	// marker on ContextForm, which is out of M1 scope (Task 10's form
+	// treats booleans as non-source-of-truth for exactly this reason).
 	if f.TLSFirst {
 		opts = append(opts, natscontext.WithTLSHandshakeFirst())
 	}
@@ -242,15 +248,22 @@ func checkFileRefs(c *natscontext.Context) error {
 
 // filePath maps a credential/TLS reference to a stat-able filesystem
 // path, or "" when the reference is empty or handled by a connect-time
-// credential resolver instead of the local filesystem.
+// credential resolver instead of the local filesystem. Scheme matching
+// is case-insensitive, mirroring the library's EqualFold scheme
+// parsing, and covers opaque data: URIs (which have no "//" separator).
 func filePath(ref string) string {
-	switch {
-	case ref == "":
+	if ref == "" {
 		return ""
-	case strings.HasPrefix(ref, "file://"):
-		return strings.TrimPrefix(ref, "file://")
-	case strings.Contains(ref, "://"):
-		return "" // nsc://, op://, env://, data: — resolved at connect time
+	}
+
+	lower := strings.ToLower(ref)
+	switch {
+	case strings.HasPrefix(lower, "file://"):
+		return ref[len("file://"):]
+	case strings.HasPrefix(lower, "data:"):
+		return "" // inline payload; nothing on disk to check
+	case strings.Contains(lower, "://"):
+		return "" // nsc://, op://, env:// — resolved at connect time
 	default:
 		return ref
 	}
@@ -269,8 +282,10 @@ var envWarningVars = []string{
 
 // EnvWarnings returns the names of the NATS_* environment variables
 // from the warning set that are currently set to a non-empty value.
+// The result is never nil so it JSON-serializes as [] rather than null
+// (the frontend maps over it).
 func EnvWarnings() []string {
-	var present []string
+	present := make([]string, 0, len(envWarningVars))
 	for _, name := range envWarningVars {
 		if os.Getenv(name) != "" {
 			present = append(present, name)

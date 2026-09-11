@@ -182,6 +182,15 @@ func TestEnvWarnings(t *testing.T) {
 			t.Fatalf("EnvWarnings() = %v, want %q present", got, want)
 		}
 	}
+
+	// The warning set is closed: blanking all six vars must yield a
+	// NON-nil empty slice so JSON serialization is [] rather than null.
+	for _, name := range []string{"NATS_URL", "NATS_CONTEXT", "NATS_USER", "NATS_PASSWORD", "NATS_CREDS", "NATS_NKEY"} {
+		t.Setenv(name, "")
+	}
+	if got := EnvWarnings(); got == nil || len(got) != 0 {
+		t.Fatalf("EnvWarnings() with none set = %v, want non-nil empty", got)
+	}
 }
 
 func TestCopy(t *testing.T) {
@@ -283,12 +292,21 @@ func TestValidateAccessibility(t *testing.T) {
 	}
 
 	// URI-backed credentials are resolved at connect time, not by Stat.
-	err = store.Save(ctx, ContextForm{Name: "uri-creds", URL: "nats://a:4222", Creds: "nsc://OP/ACC/USER"})
-	if err != nil {
-		t.Fatal(err)
+	// data: URIs are opaque (no "//" separator) and scheme matching is
+	// case-insensitive, mirroring the library's EqualFold scheme parsing.
+	uriCreds := []struct{ name, ref string }{
+		{"uri-creds-nsc", "nsc://OP/ACC/USER"},
+		{"uri-creds-data", "data:;base64,AAAA"},
+		{"uri-creds-env", "ENV://NATS_CREDS"},
 	}
-	if err := store.Validate(ctx, "uri-creds"); err != nil {
-		t.Fatalf("URI creds must not be Stat-ed: %v", err)
+	for _, uc := range uriCreds {
+		err = store.Save(ctx, ContextForm{Name: uc.name, URL: "nats://a:4222", Creds: uc.ref})
+		if err != nil {
+			t.Fatalf("save with creds %q: %v", uc.ref, err)
+		}
+		if err := store.Validate(ctx, uc.name); err != nil {
+			t.Fatalf("URI creds %q must not be Stat-ed: %v", uc.ref, err)
+		}
 	}
 
 	if err := store.Validate(ctx, "missing"); !errors.Is(err, natscontext.ErrNotFound) {
