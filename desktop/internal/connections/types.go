@@ -36,3 +36,42 @@ type ContextForm struct {
 	ColorScheme   string `json:"color_scheme"`
 	TLSFirst      bool   `json:"tls_first"`
 }
+
+// State is a connection lifecycle state of the Manager (spec §7.3).
+type State string
+
+// The five connection states (spec §7.3); values are the wire/UI names.
+const (
+	StateDisconnected State = "disconnected"
+	StateConnecting   State = "connecting"
+	StateConnected    State = "connected"
+	StateReconnecting State = "reconnecting"
+	StateFailed       State = "failed"
+)
+
+// EventConnState is the event name emitted on every Manager state
+// transition. Its payload is a StateEvent.
+const EventConnState = "conn:state"
+
+// StateEvent is the payload of EventConnState: the full state of the
+// active connection at the moment of the transition. Since is the RFC3339
+// timestamp of when the current state was entered, RttMs the last
+// round-trip time measured while connected (0 otherwise), and Reason the
+// error text for failed states.
+type StateEvent struct {
+	Context string `json:"context"`
+	State   State  `json:"state"`
+	Since   string `json:"since"`
+	RttMs   int64  `json:"rtt_ms"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// TestResult is the outcome of Manager.CheckConnection: whether the
+// probe connection could be established, its averaged RTT, and whether a
+// JetStream account was reachable on the other end.
+type TestResult struct {
+	OK        bool   `json:"ok"`
+	RttMs     int64  `json:"rtt_ms"`
+	JetStream bool   `json:"jetstream"`
+	Error     string `json:"error,omitempty"`
+}
