@@ -133,6 +133,15 @@ it("connected shows rtt in status footer", () => {
 
 // ---- §18.3 gap fill: connecting shows the spinner in the status footer ----
 
+it("fix-connection from the banner lands on Settings > Connections (§6.2)", () => {
+  const off = captureEvents("conn:state");
+  render(<App />);
+  off.fire({ context: "demo", state: "failed", rtt_ms: 0, reason: "authorization violation" });
+  fireEvent.click(screen.getByTestId("conn-fix"));
+  expect(screen.getByTestId("settings-tab-connections").getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByTestId("connections-page")).toBeTruthy();
+});
+
 it("shows a spinner in the status footer while connecting", () => {
   const off = captureEvents("conn:state");
   renderShell();

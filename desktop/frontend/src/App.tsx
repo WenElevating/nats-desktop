@@ -181,12 +181,18 @@ function AppBody() {
   // the guide card replaces the per-page empty state.
   const firstRun = contexts !== null && contexts.length === 0;
 
+  // Land on Settings > Connections (shared by the fix-connection actions and
+  // the first-run guide CTA).
+  const gotoConnections = () => {
+    setPage("settings");
+    setSettingsTab("connections");
+  };
+
   // Guide CTA: land on Settings > Connections and pulse the create signal so
   // the page opens the create dialog (whether it mounts fresh or is already
   // mounted).
   const openCreateContext = () => {
-    setPage("settings");
-    setSettingsTab("connections");
+    gotoConnections();
     setCreateSignal((n) => n + 1);
   };
 
@@ -199,6 +205,7 @@ function AppBody() {
         contexts={contexts ?? []}
         onSwitchContext={switchContext}
         guide={firstRun ? <FirstRunGuide onCreate={openCreateContext} /> : undefined}
+        onFixConnection={gotoConnections}
       >
         {page === "settings" ? (
           <div className="flex min-h-0 flex-1 flex-col" data-testid="settings-tabs">

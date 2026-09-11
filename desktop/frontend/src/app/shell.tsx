@@ -81,6 +81,10 @@ export interface ShellProps {
   /** Rendered in place of the disconnected empty state on first run (no
    * contexts yet): the guide card with the "create context" CTA (AC-001). */
   guide?: ReactNode;
+  /** Invoked by the banner / empty-state "Edit connection" actions. Defaults
+   * to plain settings navigation; App points it at the Connections tab so
+   * fix-connection lands on the context list (spec §6.2). */
+  onFixConnection?: () => void;
 }
 
 /**
@@ -97,16 +101,22 @@ export function Shell({
   contexts = [],
   onSwitchContext,
   guide,
+  onFixConnection,
 }: ShellProps) {
   const { t } = useTranslation();
   // §18.3: the banner and status footer consume the live connection state
   // (conn:state events via useConnState; the context default is DISCONNECTED
-  // when no provider is mounted). An explicit prop wins so hosts and tests
-  // can pin a state.
-  const conn = connOverride ?? useConnState();
+  // when no provider is mounted). The hook is called unconditionally (rules
+  // of hooks — it is a pure useContext, no subscription); an explicit prop
+  // then wins so hosts and tests can pin a state.
+  const ctxConn = useConnState();
+  const conn = connOverride ?? ctxConn;
   const connected = conn.state === "connected";
   const showBanner = conn.state === "reconnecting" || conn.state === "failed";
   const bannerWarn = conn.state === "reconnecting";
+  // Fix-connection action shared by the banner and the empty state: straight
+  // to Settings unless the host routes it to the Connections tab.
+  const fixConnection = onFixConnection ?? (() => onNavigate("settings"));
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
@@ -220,7 +230,7 @@ export function Shell({
               size="xs"
               className="shrink-0"
               data-testid="conn-fix"
-              onClick={() => onNavigate("settings")}
+              onClick={fixConnection}
             >
               {t("conn.fixConnection")}
             </Button>
@@ -230,7 +240,7 @@ export function Shell({
           {page !== "settings" && !connected ? (
             // First run (no contexts yet) shows the guide card instead of
             // the plain empty state (AC-001); the sidebar stays usable.
-            guide ?? <EmptyState page={page} onNavigate={onNavigate} />
+            guide ?? <EmptyState page={page} onFix={fixConnection} />
           ) : (
             children
           )}
@@ -242,7 +252,7 @@ export function Shell({
 
 /** Placeholder shown on data pages while no connection is established
  * (§18.3 disconnected: "choose or create a connection" guidance card). */
-function EmptyState({ page, onNavigate }: { page: PageId; onNavigate: (p: PageId) => void }) {
+function EmptyState({ page, onFix }: { page: PageId; onFix: () => void }) {
   const { t } = useTranslation();
   return (
     <div
@@ -253,7 +263,7 @@ function EmptyState({ page, onNavigate }: { page: PageId; onNavigate: (p: PageId
       <h2 className="text-lg font-medium">{t(`nav.${page}`)}</h2>
       <p className="text-sm text-[var(--fg-muted)]">{t("conn.chooseOrCreate")}</p>
       <p className="text-xs text-[var(--fg-faint)]">{t("common.comingSoon")}</p>
-      <Button variant="outline" size="sm" className="mt-2" onClick={() => onNavigate("settings")}>
+      <Button variant="outline" size="sm" className="mt-2" onClick={onFix}>
         {t("conn.fixConnection")}
       </Button>
     </div>
