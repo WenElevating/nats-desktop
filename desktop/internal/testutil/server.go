@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 )
 
 // start boots an embedded nats-server with the given options, waits for it to
@@ -46,4 +47,24 @@ func StartAuthServer(t *testing.T, user, pass string) string {
 		ServerName: "TEST_AUTH",
 		Users:      []*server.User{{Username: user, Password: pass}},
 	})
+}
+
+// StartEcho connects to the server at url and subscribes to "echo", responding
+// to each request with the request payload echoed back. The connection is
+// closed via t.Cleanup. Header passthrough (what the requester sent vs. what
+// the responder returns) is asserted by the calling test case.
+func StartEcho(t *testing.T, url string) {
+	t.Helper()
+	nc, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nc.Subscribe("echo", func(m *nats.Msg) {
+		m.Respond(m.Data)
+	}); err != nil {
+		nc.Close()
+		t.Fatal(err)
+	}
+	nc.Flush()
+	t.Cleanup(nc.Close)
 }
