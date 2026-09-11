@@ -12,8 +12,10 @@
   },
   "dependencies": {
     "@wailsio/runtime": "latest",
+    "i18next": "^26.4.2",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "react-i18next": "^17.0.13"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
