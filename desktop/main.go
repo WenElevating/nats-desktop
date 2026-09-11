@@ -9,6 +9,7 @@ import (
 	"github.com/WenElevating/nats-desktop/desktop/internal/appdir"
 	"github.com/WenElevating/nats-desktop/desktop/internal/connections"
 	"github.com/WenElevating/nats-desktop/desktop/internal/logging"
+	"github.com/WenElevating/nats-desktop/desktop/internal/messaging"
 	"github.com/WenElevating/nats-desktop/desktop/internal/settings"
 	"github.com/WenElevating/nats-desktop/desktop/internal/version"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -62,14 +63,31 @@ func main() {
 
 	// Connections: one registry shared by the context store and the live
 	// connection manager; Manager state transitions are forwarded to the
-	// frontend as "conn:state" events (spec §7.3).
+	// frontend as "conn:state" events (spec §7.3) and side-banded into the
+	// messaging SessionManager so its sessions resubscribe on reconnect.
+	//
+	// The conn:state mirror calls msgSvc.Sessions.NotifyConnState directly:
+	// it is documented safe from the Manager's emit path (the resubscribe
+	// work runs on its own worker goroutine and the notification send is
+	// coalescing and non-blocking), so no extra channel/goroutine is needed.
+	// msgSvc is declared ahead of the closure and assigned right after
+	// construction — no transition can fire in between (nothing dials before
+	// Connect, which main only reaches after the assignment), and the nil
+	// guard covers the emit-before-construct window anyway.
 	reg := connections.NewRegistry()
+	var msgSvc *messaging.MessagingService
 	emit := func(name string, data any) {
 		if app := application.Get(); app != nil {
 			app.Event.Emit(name, data)
 		}
+		if name == connections.EventConnState && msgSvc != nil {
+			if ev, ok := data.(connections.StateEvent); ok {
+				msgSvc.Sessions.NotifyConnState(ev)
+			}
+		}
 	}
 	manager := connections.NewManager(reg, logger, emit)
+	msgSvc = messaging.NewMessagingService(manager, logger, emit, settingsPath)
 
 	// settings.LastActiveContext persistence: load-modify-save on every
 	// successful Connect (spec §6.1). Routed through settings.Update so it
@@ -101,6 +119,7 @@ func main() {
 			application.NewService(settingsSvc),
 			application.NewService(logging.NewService()),
 			application.NewService(connSvc),
+			application.NewService(msgSvc),
 			application.NewService(version.NewService()),
 		},
 		Assets: application.AssetOptions{

@@ -29,6 +29,29 @@ export type {
   StateEvent,
   TestResult,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/connections/models.js";
+export {
+  ClearSession,
+  CloseSession,
+  CreateSession,
+  ListSessions,
+  PauseSession,
+  Publish,
+  Request,
+  ResumeSession,
+  Trace,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/messagingservice.js";
+export type {
+  JSPosition,
+  PubForm,
+  PubResult,
+  PushMode,
+  ReqForm,
+  ReqResult,
+  SessionSpec,
+  SessionState,
+  TraceForm,
+  TraceHop,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/models.js";
 
 // Default mirrors settings.Default() in internal/settings/settings.go.
 // Keep the field values in sync with the Go side.
