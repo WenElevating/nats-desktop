@@ -64,3 +64,25 @@ func TestSaveAtomic(t *testing.T) {
 		t.Fatalf("not valid json: %v", err)
 	}
 }
+
+// Regression (final review C1): the Service facade must merge user sections
+// only — a stale frontend draft saving settings must not clobber the
+// server-managed last_active_context that startup auto-reconnect relies on.
+func TestSaveSettingsDoesNotClobberLastActiveContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := Update(path, func(s *Settings) { s.LastActiveContext = "demo" }); err != nil {
+		t.Fatal(err)
+	}
+	stale := Default()
+	stale.Appearance.Theme = "dark"
+	if err := NewService(path).SaveSettings(stale); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := Load(path)
+	if got.LastActiveContext != "demo" {
+		t.Fatalf("clobbered: %q", got.LastActiveContext)
+	}
+	if got.Appearance.Theme != "dark" {
+		t.Fatal("user sections not saved")
+	}
+}

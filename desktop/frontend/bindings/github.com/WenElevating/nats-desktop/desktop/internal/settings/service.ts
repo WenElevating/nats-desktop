@@ -18,6 +18,11 @@ export function GetSettings(): $CancellablePromise<$models.Settings> {
     return $Call.ByID(3951200254);
 }
 
+/**
+ * SaveSettings persists only the user-owned sections. last_active_context is
+ * server-managed (persisted by main.go on Connect) and must survive a save
+ * built from a stale frontend draft — hence the merge instead of a full write.
+ */
 export function SaveSettings(v: $models.Settings): $CancellablePromise<void> {
     return $Call.ByID(844930585, v);
 }

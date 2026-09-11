@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { useTranslation } from "../../app/i18n";
 import { OpenLogsDir, type Settings } from "../../lib/bindings";
 import "./SettingsPage.css";
@@ -21,6 +22,8 @@ const toNumber = (v: string): number => {
  * Controlled settings form. Owns a draft copy of the settings object; Save
  * hands the whole (possibly edited) object to the parent's onSave, which is
  * responsible for persisting and re-applying theme/language (spec §6.12).
+ * Note: the payload's last_active_context is ignored by the backend — it is
+ * a server-managed field (persisted on Connect), never restored from a draft.
  */
 export function SettingsPage({ settings, onSave }: SettingsPageProps) {
   const { t } = useTranslation();
@@ -44,6 +47,9 @@ export function SettingsPage({ settings, onSave }: SettingsPageProps) {
       setSaved(true);
     } catch (err) {
       console.error("save settings failed:", err);
+      toast.error(t("settings.saveFailed", {
+        error: err instanceof Error ? err.message : String(err),
+      }));
     } finally {
       setSaving(false);
     }

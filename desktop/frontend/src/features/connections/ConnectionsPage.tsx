@@ -297,7 +297,7 @@ export function ConnectionsPage({
       const result = await CheckConnection(toWire(draft));
       setTestResult(result ?? { ok: false, rtt_ms: 0, jetstream: false, error: "no result" });
     } catch (err) {
-      setTestResult({ ok: false, rtt_ms: 0, jetstream: false, error: String(err) });
+      setTestResult({ ok: false, rtt_ms: 0, jetstream: false, error: errText(err) });
     } finally {
       setTesting(false);
     }

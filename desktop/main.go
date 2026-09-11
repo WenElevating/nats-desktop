@@ -72,14 +72,13 @@ func main() {
 	manager := connections.NewManager(reg, logger, emit)
 
 	// settings.LastActiveContext persistence: load-modify-save on every
-	// successful Connect (spec §6.1).
+	// successful Connect (spec §6.1). Routed through settings.Update so it
+	// shares the same serializer as SaveSettings — a settings save landing
+	// mid-persistActive must not lose the update (or vice versa).
 	persistActive := func(name string) error {
-		cur, err := settings.Load(settingsPath)
-		if err != nil {
-			return err
-		}
-		cur.LastActiveContext = name
-		return settings.Save(settingsPath, cur)
+		return settings.Update(settingsPath, func(cur *settings.Settings) {
+			cur.LastActiveContext = name
+		})
 	}
 	connSvc := connections.NewService(connections.NewStore(reg), manager, logger, persistActive)
 

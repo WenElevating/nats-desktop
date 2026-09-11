@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/WenElevating/nats-desktop/desktop/internal/appdir"
 )
@@ -73,6 +74,23 @@ func Save(path string, s Settings) error {
 		return fmt.Errorf("write settings: %w", err)
 	}
 	return os.Rename(tmp, path) // 原子替换（spec §16.3）
+}
+
+// fileMu serializes read-modify-write cycles across all settings writers so
+// a concurrent save cannot clobber server-managed fields such as
+// last_active_context (which main.go persists on Connect).
+var fileMu sync.Mutex
+
+// Update loads, mutates, and atomically saves; ALL writers must use it.
+func Update(path string, fn func(*Settings)) error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	s, err := Load(path)
+	if err != nil {
+		return err
+	}
+	fn(&s)
+	return Save(path, s)
 }
 
 // Path returns <appdir>/settings.json, creating the directory.
