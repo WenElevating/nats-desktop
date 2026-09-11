@@ -45,14 +45,28 @@ func (s *Service) ListContexts() []ContextSummary {
 
 // GetContextForm loads the full stored context as a form so the edit
 // dialog prefills every field (Task 6 caution: edits skip empty fields,
-// so the form must show stored values to keep "unchanged" the norm).
-func (s *Service) GetContextForm(name string) (ContextForm, error) {
-	return s.store.Form(context.Background(), name)
+// so the form must show stored values to keep "unchanged" the norm),
+// together with the context file's mtime at load time. The mtime is
+// snapshotted before the load so a file written concurrently is seen as
+// externally modified at save time rather than adopted silently.
+func (s *Service) GetContextForm(name string) (ContextFormResult, error) {
+	modTimeMs, err := s.store.ModTime(context.Background(), name)
+	if err != nil {
+		return ContextFormResult{}, err
+	}
+	form, err := s.store.Form(context.Background(), name)
+	if err != nil {
+		return ContextFormResult{}, err
+	}
+	return ContextFormResult{Form: form, ModTimeMs: modTimeMs}, nil
 }
 
-// SaveContext creates or edits the context described by form.
-func (s *Service) SaveContext(form ContextForm) error {
-	return s.store.Save(context.Background(), form)
+// SaveContext creates or edits the context described by form. A
+// knownModTimeMs > 0 (the GetContextForm snapshot) makes the save fail
+// with ErrContextModified when the file changed on disk in between;
+// 0 skips the check (creates and the frontend's "keep mine" path).
+func (s *Service) SaveContext(form ContextForm, knownModTimeMs int64) error {
+	return s.store.Save(context.Background(), form, knownModTimeMs)
 }
 
 // DeleteContext removes the named context (unselecting it first when it

@@ -74,7 +74,7 @@ func main() {
 	// construction — no transition can fire in between (nothing dials before
 	// Connect, which main only reaches after the assignment), and the nil
 	// guard covers the emit-before-construct window anyway.
-	reg := connections.NewRegistry()
+	reg, backend := connections.NewRegistryAndBackend()
 	var msgSvc *messaging.MessagingService
 	emit := func(name string, data any) {
 		if app := application.Get(); app != nil {
@@ -98,7 +98,7 @@ func main() {
 			cur.LastActiveContext = name
 		})
 	}
-	connSvc := connections.NewService(connections.NewStore(reg), manager, logger, persistActive)
+	connSvc := connections.NewService(connections.NewStoreWithBackend(reg, backend), manager, logger, persistActive)
 
 	// showMainWindow reveals and focuses the main window; used by the tray
 	// Show item and the single-instance second-launch callback. Resolves the

@@ -81,6 +81,16 @@ const emptyDraft = (): Draft => ({
 const asAuthType = (v: string): AuthType =>
   (AUTH_TYPES as readonly string[]).includes(v) ? (v as AuthType) : "none";
 
+/** Stored form → auth type, mirroring the Go side's authType() order
+ * (creds -> nkey -> token -> userpass -> none). Used by the conflict
+ * "reload" path, where no list summary is at hand. */
+const authTypeOf = (f: ContextForm): AuthType =>
+  f.creds ? "creds"
+  : f.nkey ? "nkey"
+  : f.token ? "token"
+  : f.user || f.password ? "userpass"
+  : "none";
+
 /** Wire (snake_case Go model) → form draft, for the edit prefill. */
 const fromWire = (f: ContextForm, authType: string): Draft => ({
   name: f.name,
@@ -195,10 +205,22 @@ export function ConnectionsPage({
   // Delete confirm state.
   const [deleting, setDeleting] = useState<ContextSummary | null>(null);
 
+  // External-modification conflict (§6.2): set when SaveContext rejects
+  // with the backend's sentinel because the context file changed on disk
+  // after this dialog loaded it.
+  const [conflictOpen, setConflictOpen] = useState(false);
+
   // Edit-prefill race guard: bumped on every openNew/openEdit; a
   // GetContextForm resolution only applies while its epoch is current, so
   // a stale resolution can never clobber a newer dialog's draft.
   const editEpoch = useRef(0);
+  // The context file's mtime as observed when the edit dialog loaded the
+  // form; handed back to SaveContext as knownModTimeMs (0 = skip check —
+  // creates, and edits whose prefill has not landed yet).
+  const modTimeRef = useRef(0);
+  // Summary of the context being edited, so the conflict "reload" path
+  // can re-prefill with the same auth-type mapping.
+  const editTarget = useRef<ContextSummary | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -229,12 +251,15 @@ export function ConnectionsPage({
     setErrors({});
     setTestResult(null);
     setShowPassword(false);
+    modTimeRef.current = 0; // creates never carry a known mtime
+    editTarget.current = null;
     setFormOpen(true);
   };
 
   const openEdit = (c: ContextSummary) => {
     const epoch = ++editEpoch.current;
     setEditing(true);
+    editTarget.current = c;
     // Prefill from the summary at once, then refine with the full stored
     // form (Task 6 caution: the edit form must show stored values so
     // "unchanged" is the norm — empty fields would keep old values).
@@ -250,8 +275,11 @@ export function ConnectionsPage({
     setShowPassword(false);
     setFormOpen(true);
     GetContextForm(c.name)
-      .then((form) => {
-        if (form && editEpoch.current === epoch) setDraft(fromWire(form, c.auth_type));
+      .then((res) => {
+        if (res && editEpoch.current === epoch) {
+          setDraft(fromWire(res.form, c.auth_type));
+          modTimeRef.current = res.mod_time_ms ?? 0;
+        }
       })
       .catch((err) => console.error("load context form failed:", err));
   };
@@ -277,15 +305,60 @@ export function ConnectionsPage({
     return true;
   };
 
-  const handleSave = async () => {
-    if (!validate()) return;
+  /** Shared save tail: resolves true when the context was persisted.
+   * A conflict rejection opens the §6.2 resolution dialog instead of
+   * toasting; any other failure keeps the form open with a toast. */
+  const doSave = async (knownModTimeMs: number): Promise<boolean> => {
     try {
-      await SaveContext(toWire(draft));
-      setFormOpen(false); // close only on success — failures toast instead
-      afterMutation();
+      await SaveContext(toWire(draft), knownModTimeMs);
+      return true;
     } catch (err) {
+      // The backend's sentinel sentence — the file changed on disk after
+      // this dialog loaded it (kept byte-stable by the Go side).
+      if (errText(err).includes("context modified externally")) {
+        setConflictOpen(true);
+        return false;
+      }
       console.error("save context failed:", err);
       toast.error(t("connections.saveFailed", { error: errText(err) }));
+      return false;
+    }
+  };
+
+  const handleSave = async () => {
+    if (!validate()) return;
+    // The observed mtime rides along so external edits are caught; it is
+    // 0 (check disabled) for creates and until the prefill lands.
+    if (await doSave(modTimeRef.current)) {
+      setFormOpen(false); // close only on success — failures toast instead
+      afterMutation();
+    }
+  };
+
+  /** Conflict resolution "keep mine": re-save with the check disabled. */
+  const keepMine = async () => {
+    setConflictOpen(false);
+    if (await doSave(0)) {
+      setFormOpen(false);
+      afterMutation();
+    }
+  };
+
+  /** Conflict resolution "reload": re-fetch the stored form and replace
+   * the draft (epoch-guarded like the original prefill). */
+  const reloadStored = async () => {
+    setConflictOpen(false);
+    const name = draft.name;
+    const target = editTarget.current;
+    const epoch = ++editEpoch.current;
+    try {
+      const res = await GetContextForm(name);
+      if (res && editEpoch.current === epoch) {
+        setDraft(fromWire(res.form, target ? target.auth_type : authTypeOf(res.form)));
+        modTimeRef.current = res.mod_time_ms ?? 0;
+      }
+    } catch (err) {
+      console.error("reload context form failed:", err);
     }
   };
 
@@ -705,6 +778,32 @@ export function ConnectionsPage({
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction onClick={(e) => { e.preventDefault(); void confirmDelete(); }}>
               {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* External-modification conflict (§6.2): keep the in-dialog edits
+       * (re-save with the mtime check disabled) or adopt the stored file. */}
+      <AlertDialog
+        open={conflictOpen}
+        onOpenChange={(o) => {
+          if (!o) setConflictOpen(false);
+        }}
+      >
+        <AlertDialogContent data-testid="conflict-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("connections.conflictTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("connections.conflictBody", { name: draft.name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => void keepMine()}>
+              {t("connections.keepMine")}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={(e) => { e.preventDefault(); void reloadStored(); }}>
+              {t("connections.reload")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -25,6 +25,7 @@ export {
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/connections/service.js";
 export type {
   ContextForm,
+  ContextFormResult,
   ContextSummary,
   StateEvent,
   TestResult,

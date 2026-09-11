@@ -28,6 +28,18 @@ export interface ContextForm {
 }
 
 /**
+ * ContextFormResult pairs the edit dialog's prefill form with the
+ * modification time of the context file at load time (Unix ms). The
+ * ModTimeMs snapshot is handed back to SaveContext as knownModTimeMs so
+ * an external change between load and save can be detected (spec §6.2);
+ * it is 0 for a context that does not exist yet.
+ */
+export interface ContextFormResult {
+    "form": ContextForm;
+    "mod_time_ms": number;
+}
+
+/**
  * ContextSummary is the read model for a stored context, as shown in
  * connection lists and switchers.
  */

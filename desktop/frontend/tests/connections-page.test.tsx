@@ -65,10 +65,20 @@ const fullForm = {
   tls_first: false,
 };
 
+// GetContextForm resolves a { form, mod_time_ms } wrapper (Task 12): the
+// mtime snapshot the edit dialog must hand back to SaveContext.
+const formResult = (form: typeof fullForm = fullForm, modTimeMs = 17180) => ({
+  form,
+  mod_time_ms: modTimeMs,
+});
+
+// The Go sentinel, wrapped the way Wails surfaces it (name included).
+const conflictError = () => new Error('save context "dev": context modified externally');
+
 beforeEach(() => {
   vi.mocked(ListContexts).mockResolvedValue([summary()]);
   vi.mocked(EnvWarnings).mockResolvedValue([]);
-  vi.mocked(GetContextForm).mockResolvedValue(fullForm as never);
+  vi.mocked(GetContextForm).mockResolvedValue(formResult() as never);
   vi.mocked(SaveContext).mockResolvedValue(undefined);
   vi.mocked(DeleteContext).mockResolvedValue(undefined);
   vi.mocked(CopyContext).mockResolvedValue(undefined);
@@ -151,12 +161,9 @@ it("copy prompts for a new name and duplicates the context", async () => {
 });
 
 it("edit prefills the stored context form and disables renaming", async () => {
-  vi.mocked(GetContextForm).mockResolvedValue({
-    ...fullForm,
-    url: "nats://stored:4222",
-    user: "alice",
-    password: "secret",
-  } as never);
+  vi.mocked(GetContextForm).mockResolvedValue(
+    formResult({ ...fullForm, url: "nats://stored:4222", user: "alice", password: "secret" }) as never,
+  );
   render(<ConnectionsPage />);
   await screen.findByText("dev");
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -202,4 +209,96 @@ it("save failure toasts the server error and keeps the dialog open", async () =>
   // Dialog stays open so the user can retry or adjust (no silent close).
   expect(screen.getByLabelText("Name")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+});
+
+// ---- Task 12: external-modification conflict detection (spec §6.2) ----
+
+it("edit saves carry the observed mtime; creates carry 0", async () => {
+  vi.mocked(GetContextForm).mockResolvedValue(formResult(fullForm, 987654) as never);
+  render(<ConnectionsPage />);
+  await screen.findByText("dev");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("Server URL") as HTMLInputElement).value).toBe("nats://localhost:4222"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(SaveContext).toHaveBeenCalledWith(expect.objectContaining({ name: "dev" }), 987654),
+  );
+
+  // Create flow: no snapshot exists, the check stays disabled.
+  fireEvent.click(screen.getByRole("button", { name: "New context" }));
+  await userEvent.type(await screen.findByLabelText("Name"), "prod");
+  fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "nats://prod:4222" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(SaveContext).toHaveBeenLastCalledWith(expect.objectContaining({ name: "prod" }), 0),
+  );
+});
+
+it("an external modification opens the conflict dialog instead of toasting", async () => {
+  vi.mocked(SaveContext).mockRejectedValue(conflictError());
+  render(<ConnectionsPage />);
+  await screen.findByText("dev");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await screen.findByLabelText("Name");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByText("Context changed on disk")).toBeTruthy();
+  expect(within(dialog).getByText(/dev/)).toBeTruthy();
+  // A conflict is not a generic failure: no toast, and the edit form is
+  // still open underneath awaiting the user's choice.
+  expect(toast.error).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("Server URL")).toBeTruthy();
+  expect(SaveContext).toHaveBeenCalledTimes(1);
+});
+
+it("keep mine re-saves with the mtime check disabled and closes", async () => {
+  vi.mocked(SaveContext).mockRejectedValueOnce(conflictError()).mockResolvedValueOnce(undefined);
+  render(<ConnectionsPage />);
+  await screen.findByText("dev");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await screen.findByLabelText("Name");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Keep mine" }));
+
+  await waitFor(() => expect(SaveContext).toHaveBeenCalledTimes(2));
+  expect(SaveContext).toHaveBeenLastCalledWith(expect.objectContaining({ name: "dev" }), 0);
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  // Success closes the edit dialog and refreshes (mount + afterMutation).
+  await waitFor(() => expect(screen.queryByLabelText("Server URL")).toBeNull());
+  await waitFor(() => expect(ListContexts).toHaveBeenCalledTimes(2));
+});
+
+it("reload re-fetches the stored form, replaces the draft, and saves on the fresh mtime", async () => {
+  vi.mocked(SaveContext).mockRejectedValueOnce(conflictError());
+  vi.mocked(GetContextForm)
+    .mockResolvedValueOnce(formResult({ ...fullForm, url: "nats://stale:4222" }, 111) as never)
+    .mockResolvedValueOnce(formResult({ ...fullForm, url: "nats://stored:4222" }, 222) as never);
+  render(<ConnectionsPage />);
+  await screen.findByText("dev");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("Server URL") as HTMLInputElement).value).toBe("nats://stale:4222"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Reload" }));
+
+  await waitFor(() => expect(GetContextForm).toHaveBeenCalledTimes(2));
+  await waitFor(() =>
+    expect((screen.getByLabelText("Server URL") as HTMLInputElement).value).toBe("nats://stored:4222"),
+  );
+  // Reload only re-prefills — nothing is written, no toast is shown.
+  expect(SaveContext).toHaveBeenCalledTimes(1);
+  expect(toast.error).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+
+  // The next save carries the reloaded snapshot.
+  vi.mocked(SaveContext).mockResolvedValueOnce(undefined);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(SaveContext).toHaveBeenLastCalledWith(expect.objectContaining({ name: "dev" }), 222),
+  );
+  await waitFor(() => expect(screen.queryByLabelText("Server URL")).toBeNull());
 });

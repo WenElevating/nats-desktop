@@ -83,7 +83,7 @@ func newConnectedServiceStack(t *testing.T, behaviorJSON string) (*connections.M
 	svc = NewMessagingService(mgr, log, rec.emit, settingsPath)
 
 	store := connections.NewStore(reg)
-	if err := store.Save(context.Background(), connections.ContextForm{Name: "svc", URL: localServerURL}); err != nil {
+	if err := store.Save(context.Background(), connections.ContextForm{Name: "svc", URL: localServerURL}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.Connect(context.Background(), "svc"); err != nil {

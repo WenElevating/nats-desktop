@@ -80,9 +80,12 @@ export function EnvWarnings(): $CancellablePromise<string[] | null> {
 /**
  * GetContextForm loads the full stored context as a form so the edit
  * dialog prefills every field (Task 6 caution: edits skip empty fields,
- * so the form must show stored values to keep "unchanged" the norm).
+ * so the form must show stored values to keep "unchanged" the norm),
+ * together with the context file's mtime at load time. The mtime is
+ * snapshotted before the load so a file written concurrently is seen as
+ * externally modified at save time rather than adopted silently.
  */
-export function GetContextForm(name: string): $CancellablePromise<$models.ContextForm> {
+export function GetContextForm(name: string): $CancellablePromise<$models.ContextFormResult> {
     return $Call.ByID(2552732282, name);
 }
 
@@ -96,8 +99,11 @@ export function ListContexts(): $CancellablePromise<$models.ContextSummary[] | n
 }
 
 /**
- * SaveContext creates or edits the context described by form.
+ * SaveContext creates or edits the context described by form. A
+ * knownModTimeMs > 0 (the GetContextForm snapshot) makes the save fail
+ * with ErrContextModified when the file changed on disk in between;
+ * 0 skips the check (creates and the frontend's "keep mine" path).
  */
-export function SaveContext(form: $models.ContextForm): $CancellablePromise<void> {
-    return $Call.ByID(2616488113, form);
+export function SaveContext(form: $models.ContextForm, knownModTimeMs: number): $CancellablePromise<void> {
+    return $Call.ByID(2616488113, form, knownModTimeMs);
 }

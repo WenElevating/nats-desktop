@@ -157,7 +157,7 @@ func newSessionStack(t *testing.T, url string, defaultBuf int, defaultPush PushM
 	sm = NewSessionManager(mgr, log, rec.emit, defaultBuf, defaultPush)
 
 	store := connections.NewStore(reg)
-	if err := store.Save(context.Background(), connections.ContextForm{Name: "sess", URL: url}); err != nil {
+	if err := store.Save(context.Background(), connections.ContextForm{Name: "sess", URL: url}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.Connect(context.Background(), "sess"); err != nil {
@@ -1065,7 +1065,7 @@ func TestSessionReconnectResubscribes(t *testing.T) {
 	t.Cleanup(sm.CloseAll)    // registered last: runs first (live conn)
 
 	store := connections.NewStore(reg)
-	if err := store.Save(context.Background(), connections.ContextForm{Name: "re", URL: srv.ClientURL()}); err != nil {
+	if err := store.Save(context.Background(), connections.ContextForm{Name: "re", URL: srv.ClientURL()}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.Connect(context.Background(), "re"); err != nil {

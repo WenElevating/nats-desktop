@@ -66,7 +66,7 @@ func newStressStack(t *testing.T) (*SessionManager, *stressEmit) {
 	sm = NewSessionManager(mgr, log, e.emit, 0, PushRealtime)
 
 	store := connections.NewStore(reg)
-	if err := store.Save(context.Background(), connections.ContextForm{Name: "stress", URL: localServerURL}); err != nil {
+	if err := store.Save(context.Background(), connections.ContextForm{Name: "stress", URL: localServerURL}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.Connect(context.Background(), "stress"); err != nil {

@@ -8,21 +8,22 @@ import (
 	"github.com/nats-io/jsm.go/natscontext"
 )
 
-func newTestService(t *testing.T) *Service {
+func newTestService(t *testing.T) (*Service, *natscontext.FileBackend) {
 	t.Helper()
-	reg := natscontext.NewRegistry(natscontext.NewFileBackendAt(t.TempDir()))
-	return NewService(NewStore(reg), NewManager(reg, nil, nil), nil, nil)
+	fb := natscontext.NewFileBackendAt(t.TempDir())
+	reg := natscontext.NewRegistry(fb)
+	return NewService(NewStoreWithBackend(reg, fb), NewManager(reg, nil, nil), nil, nil), fb
 }
 
 func TestServiceListSaveGetForm(t *testing.T) {
-	svc := newTestService(t)
+	svc, _ := newTestService(t)
 
 	if got := svc.ListContexts(); len(got) != 0 {
 		t.Fatalf("fresh service lists %d contexts, want 0", len(got))
 	}
 
 	form := ContextForm{Name: "dev", URL: "nats://127.0.0.1:4222", User: "u", Password: "p", JSDomain: "cloud"}
-	if err := svc.SaveContext(form); err != nil {
+	if err := svc.SaveContext(form, 0); err != nil {
 		t.Fatalf("SaveContext: %v", err)
 	}
 
@@ -31,13 +32,18 @@ func TestServiceListSaveGetForm(t *testing.T) {
 		t.Fatalf("ListContexts = %+v, want one 'dev' userpass context", list)
 	}
 
-	// GetContextForm round-trips every stored field (edit prefill).
+	// GetContextForm round-trips every stored field (edit prefill) and
+	// snapshots the file mtime for the external-modification check.
 	got, err := svc.GetContextForm("dev")
 	if err != nil {
 		t.Fatalf("GetContextForm: %v", err)
 	}
-	if got.URL != form.URL || got.User != form.User || got.Password != form.Password || got.JSDomain != form.JSDomain {
-		t.Fatalf("GetContextForm = %+v, want the saved fields back", got)
+	f := got.Form
+	if f.URL != form.URL || f.User != form.User || f.Password != form.Password || f.JSDomain != form.JSDomain {
+		t.Fatalf("GetContextForm = %+v, want the saved fields back", f)
+	}
+	if got.ModTimeMs <= 0 {
+		t.Fatalf("GetContextForm ModTimeMs = %d, want > 0", got.ModTimeMs)
 	}
 
 	if _, err := svc.GetContextForm("nope"); err == nil {
@@ -46,8 +52,8 @@ func TestServiceListSaveGetForm(t *testing.T) {
 }
 
 func TestServiceCopyAndDelete(t *testing.T) {
-	svc := newTestService(t)
-	if err := svc.SaveContext(ContextForm{Name: "a", URL: "nats://127.0.0.1:4222"}); err != nil {
+	svc, _ := newTestService(t)
+	if err := svc.SaveContext(ContextForm{Name: "a", URL: "nats://127.0.0.1:4222"}, 0); err != nil {
 		t.Fatalf("save a: %v", err)
 	}
 	if err := svc.CopyContext("a", "b"); err != nil {
@@ -87,7 +93,7 @@ func TestServiceConnectPersistsOnlyOnSuccess(t *testing.T) {
 
 	// Success path: persist runs exactly once with the context name, and a
 	// persist error does not leak into Connect's result.
-	if err := svc.SaveContext(ContextForm{Name: "saved-ctx", URL: url}); err != nil {
+	if err := svc.SaveContext(ContextForm{Name: "saved-ctx", URL: url}, 0); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	if err := svc.Connect("saved-ctx"); err != nil {
@@ -104,7 +110,7 @@ func TestServiceConnectPersistsOnlyOnSuccess(t *testing.T) {
 }
 
 func TestServiceSnapshotAndDisconnect(t *testing.T) {
-	svc := newTestService(t)
+	svc, _ := newTestService(t)
 
 	snap := svc.ConnSnapshot()
 	if snap.State != StateDisconnected {

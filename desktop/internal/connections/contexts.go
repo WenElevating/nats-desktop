@@ -10,27 +10,91 @@ import (
 	"github.com/nats-io/jsm.go/natscontext"
 )
 
+// ErrContextModified reports that a context file changed on disk after
+// the caller loaded it (external edit via the nats CLI or an editor), so
+// overwriting it would clobber changes the user never saw. Exported for
+// tests and errors.Is; the frontend matches the sentinel sentence
+// "context modified externally" in the binding error string — keep it
+// byte-stable.
+var ErrContextModified = errors.New("context modified externally")
+
 // NewRegistry returns a Registry over the user's default context
 // directory, configured identically to the nats CLI's registry (default
 // credential resolvers plus a local active-context selector), so that
 // contexts created by either side are visible to the other.
 func NewRegistry() *natscontext.Registry {
-	return natscontext.NewRegistry(
-		natscontext.NewDefaultFileBackend(),
+	reg, _ := NewRegistryAndBackend()
+	return reg
+}
+
+// NewRegistryAndBackend returns the CLI-interop Registry together with
+// its file backend. The backend is not reachable through the Registry,
+// but Store needs it to stat context files for external-modification
+// detection (NewStoreWithBackend), so it is handed out alongside.
+func NewRegistryAndBackend() (*natscontext.Registry, *natscontext.FileBackend) {
+	backend := natscontext.NewDefaultFileBackend()
+	reg := natscontext.NewRegistry(
+		backend,
 		natscontext.WithDefaultResolvers(),
 		natscontext.WithLocalSelector(),
 	)
+	return reg, backend
 }
 
 // Store implements context CRUD over a natscontext.Registry. The zero
-// value is not usable; construct with NewStore.
+// value is not usable; construct with NewStore (or NewStoreWithBackend
+// when external-modification detection is wanted).
 type Store struct {
 	reg *natscontext.Registry
+	// pather stats context files by name; non-nil only when the Store was
+	// built with a file backend (see NewStoreWithBackend).
+	pather interface {
+		Path(name string) string
+	}
 }
 
-// NewStore wraps reg with the context CRUD operations.
+// NewStore wraps reg with the context CRUD operations. ModTime and the
+// known-mtime check of Save are unavailable (they error) because reg's
+// backend cannot be mapped to file paths; use NewStoreWithBackend for
+// that. Save with knownModTimeMs=0 bypasses the check entirely, so this
+// constructor stays valid for callers that never pass one.
 func NewStore(reg *natscontext.Registry) *Store {
 	return &Store{reg: reg}
+}
+
+// NewStoreWithBackend behaves like NewStore and additionally enables
+// external-modification detection by stat-ing context files through the
+// file backend the registry stores into. A non-file backend leaves the
+// detection disabled (Save then fails closed on known>0, like NewStore).
+func NewStoreWithBackend(reg *natscontext.Registry, backend *natscontext.FileBackend) *Store {
+	s := NewStore(reg)
+	if backend != nil {
+		s.pather = backend
+	}
+	return s
+}
+
+// ModTime returns the context file's modification time in Unix
+// milliseconds, or 0 when the context does not exist. It is the read
+// half of the external-modification check: the edit dialog snapshots it
+// with the form, and Save compares it against the file on disk.
+func (s *Store) ModTime(ctx context.Context, name string) (int64, error) {
+	if err := natscontext.ValidateName(name); err != nil {
+		return 0, err
+	}
+	if s.pather == nil {
+		return 0, fmt.Errorf("mtime probe unavailable for context %q: no file backend", name)
+	}
+
+	info, err := os.Stat(s.pather.Path(name))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("stat context %q: %w", name, err)
+	}
+
+	return info.ModTime().UnixMilli(), nil
 }
 
 // List returns a summary of every stored context, ordered by name (the
@@ -80,9 +144,25 @@ func authType(c *natscontext.Context) string {
 // stored context is loaded first and the form's non-empty fields are
 // applied on top (edit semantics: fields left empty keep their stored
 // values, matching `nats context save` behavior).
-func (s *Store) Save(ctx context.Context, form ContextForm) error {
+//
+// knownModTimeMs guards against external modification (spec §6.2): a
+// value > 0 is the ModTime snapshot taken when the edit dialog loaded
+// the form, and a file whose mtime has moved since (or that vanished)
+// aborts the save with an ErrContextModified error naming the context.
+// 0 skips the check — used for creates and for the "keep mine" choice
+// after the user has been offered the conflict resolution.
+func (s *Store) Save(ctx context.Context, form ContextForm, knownModTimeMs int64) error {
 	if err := natscontext.ValidateName(form.Name); err != nil {
 		return err
+	}
+	if knownModTimeMs != 0 {
+		current, err := s.ModTime(ctx, form.Name)
+		if err != nil {
+			return err
+		}
+		if current != knownModTimeMs {
+			return fmt.Errorf("context %q: %w", form.Name, ErrContextModified)
+		}
 	}
 
 	opts := formOptions(form)

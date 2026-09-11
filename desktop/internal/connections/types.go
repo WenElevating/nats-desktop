@@ -37,6 +37,16 @@ type ContextForm struct {
 	TLSFirst      bool   `json:"tls_first"`
 }
 
+// ContextFormResult pairs the edit dialog's prefill form with the
+// modification time of the context file at load time (Unix ms). The
+// ModTimeMs snapshot is handed back to SaveContext as knownModTimeMs so
+// an external change between load and save can be detected (spec §6.2);
+// it is 0 for a context that does not exist yet.
+type ContextFormResult struct {
+	Form      ContextForm `json:"form"`
+	ModTimeMs int64       `json:"mod_time_ms"`
+}
+
 // State is a connection lifecycle state of the Manager (spec §7.3).
 type State string
 

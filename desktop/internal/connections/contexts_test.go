@@ -22,7 +22,7 @@ func TestSaveThenList(t *testing.T) {
 	store, _ := newTestStore(t)
 	err := store.Save(context.Background(), ContextForm{
 		Name: "demo", URL: "nats://demo.nats.io:4222", User: "u", Password: "p",
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestInteropRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(natscontext.NewRegistry(natscontext.NewFileBackendAt(dir)))
 
-	err := store.Save(context.Background(), ContextForm{Name: "demo", URL: "nats://a:4222", Creds: "C:/x.creds"})
+	err := store.Save(context.Background(), ContextForm{Name: "demo", URL: "nats://a:4222", Creds: "C:/x.creds"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +72,14 @@ func TestSaveEditSemantics(t *testing.T) {
 		URL:         "nats://a:4222",
 		User:        "u",
 		Password:    "p",
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Same-name save with only some fields set: fields left empty in the
 	// form must keep their stored values (edit semantics).
-	err = store.Save(ctx, ContextForm{Name: "demo", URL: "nats://b:4222"})
+	err = store.Save(ctx, ContextForm{Name: "demo", URL: "nats://b:4222"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestDelete(t *testing.T) {
 	ctx := context.Background()
 
 	for _, name := range []string{"a", "b"} {
-		if err := store.Save(ctx, ContextForm{Name: name, URL: "nats://a:4222"}); err != nil {
+		if err := store.Save(ctx, ContextForm{Name: name, URL: "nats://a:4222"}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,7 +146,7 @@ func TestValidateName(t *testing.T) {
 	ctx := context.Background()
 
 	for _, name := range []string{"", "a/b", `a\b`, ".."} {
-		err := store.Save(ctx, ContextForm{Name: name, URL: "nats://a:4222"})
+		err := store.Save(ctx, ContextForm{Name: name, URL: "nats://a:4222"}, 0)
 		if err == nil {
 			t.Fatalf("expected rejection for name %q", name)
 		}
@@ -203,7 +203,7 @@ func TestCopy(t *testing.T) {
 		URL:         "nats://a:4222",
 		User:        "u",
 		Password:    "p",
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestValidateAccessibility(t *testing.T) {
 	ctx := context.Background()
 
 	// Plain context: structurally valid, no file references -> valid.
-	err := store.Save(ctx, ContextForm{Name: "plain", URL: "nats://a:4222", User: "u", Password: "p"})
+	err := store.Save(ctx, ContextForm{Name: "plain", URL: "nats://a:4222", User: "u", Password: "p"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestValidateAccessibility(t *testing.T) {
 		Cert:  missingCert,
 		Key:   filepath.Join(dir, "no-key.pem"),
 		CA:    missingCA,
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestValidateAccessibility(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	err = store.Save(ctx, ContextForm{Name: "ok-files", URL: "nats://a:4222", Creds: creds, Cert: cert, Key: cert})
+	err = store.Save(ctx, ContextForm{Name: "ok-files", URL: "nats://a:4222", Creds: creds, Cert: cert, Key: cert}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestValidateAccessibility(t *testing.T) {
 		{"uri-creds-env", "ENV://NATS_CREDS"},
 	}
 	for _, uc := range uriCreds {
-		err = store.Save(ctx, ContextForm{Name: uc.name, URL: "nats://a:4222", Creds: uc.ref})
+		err = store.Save(ctx, ContextForm{Name: uc.name, URL: "nats://a:4222", Creds: uc.ref}, 0)
 		if err != nil {
 			t.Fatalf("save with creds %q: %v", uc.ref, err)
 		}

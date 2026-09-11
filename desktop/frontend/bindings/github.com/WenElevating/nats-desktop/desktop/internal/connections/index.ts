@@ -12,6 +12,7 @@ export {
 
 export type {
     ContextForm,
+    ContextFormResult,
     ContextSummary,
     StateEvent,
     TestResult
