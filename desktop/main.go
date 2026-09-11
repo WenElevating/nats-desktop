@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/WenElevating/nats-desktop/desktop/internal/settings"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -34,11 +35,14 @@ func main() {
 	// 'Assets' configures the asset server with the 'FS' variable pointing to the frontend files.
 	// 'Bind' is a list of Go struct instances. The frontend has access to the methods of these instances.
 	// 'Mac' options tailor the application when running an macOS.
+	settingsPath, _ := settings.Path()
+	settingsSvc := settings.NewService(settingsPath)
+
 	app := application.New(application.Options{
 		Name:        "nats-desktop",
 		Description: "A demo of using raw HTML & CSS",
 		Services: []application.Service{
-			application.NewService(&GreetService{}),
+			application.NewService(settingsSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
