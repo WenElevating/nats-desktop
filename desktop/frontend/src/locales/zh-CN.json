@@ -1,7 +1,8 @@
 {
-  "common": { "cancel": "取消", "save": "保存", "delete": "删除", "close": "关闭", "confirm": "确认", "search": "搜索" },
-  "nav": { "dashboard": "总览", "messages": "消息", "streams": "流", "consumers": "消费者", "kv": "键值存储", "objects": "对象存储", "monitoring": "监控", "settings": "设置" },
+  "common": { "cancel": "取消", "save": "保存", "delete": "删除", "close": "关闭", "confirm": "确认", "search": "搜索", "comingSoon": "此页面将在后续版本提供" },
+  "nav": { "label": "主导航", "dashboard": "总览", "messages": "消息", "streams": "流", "consumers": "消费者", "kv": "键值存储", "objects": "对象存储", "monitoring": "监控", "settings": "设置" },
   "conn": { "disconnected": "未连接", "connecting": "连接中", "connected": "已连接", "reconnecting": "正在重新连接", "failed": "连接失败", "switchContext": "切换连接配置", "bannerReconnecting": "连接已断开，正在重新连接…", "bannerFailed": "连接失败：{{reason}}", "fixConnection": "编辑连接" },
+  "palette": { "placeholder": "输入命令或搜索…", "groupNavigation": "前往", "groupConnections": "连接", "noContexts": "暂无连接配置", "noResults": "未找到匹配项" },
   "settings": { "title": "设置", "appearance": "外观", "theme": "主题", "themeLight": "浅色", "themeDark": "深色", "themeSystem": "跟随系统", "language": "语言", "behavior": "行为", "pollInterval": "轮询间隔（秒）", "requestTimeout": "请求超时（秒）", "logLevel": "日志级别", "openLogs": "打开日志文件夹", "saved": "设置已保存" },
   "connections": { "title": "连接", "new": "新建连接配置", "edit": "编辑", "copy": "复制", "delete": "删除", "test": "测试连接", "testing": "测试中…", "name": "名称", "description": "描述", "url": "服务器地址", "auth": "认证方式", "authNone": "无", "authUser": "用户名 / 密码", "authToken": "令牌", "authCreds": "凭据文件", "authNkey": "NKey 文件", "user": "用户名", "password": "密码", "token": "令牌", "credsPath": "creds 文件路径", "nkeyPath": "nkey 文件路径", "tls": "TLS（可选）", "cert": "证书", "key": "私钥", "ca": "CA 证书", "js": "JetStream（可选）", "jsDomain": "域", "testOk": "连接成功，RTT {{rtt}}ms，JetStream：{{js}}", "testFail": "失败：{{error}}", "deleteActive": "该连接配置正在使用，将先断开连接。是否继续？", "envWarning": "检测到 CLI 环境变量（{{vars}}）。本应用将忽略它们，仅使用连接配置文件。", "nameInvalid": "名称为必填项，且不能包含路径分隔符", "urlInvalid": "请输入有效的 nats:// 或 tls:// 地址" }
 }

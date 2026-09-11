@@ -1,4 +1,57 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Tailwind v4 defaults to media-query dark mode; the app toggles a .dark
+   class on <html> (theme.ts), so redefine the dark:* variant to match. */
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+   shadcn/ui integration (Tailwind v4)
+   ---------------------------------------------------------------------------
+   The generated components under src/components/ui speak shadcn's semantic
+   color classes (bg-background, text-muted-foreground, ring-ring, ...).
+   Instead of letting shadcn write its own theme layer (its `init` cannot
+   merge into this hand-maintained file), we map every Tailwind color token
+   DIRECTLY onto our design tokens below. `@theme inline` inlines
+   `var(--bg)`-style references into the utilities, so light/dark keeps
+   working purely through the :root / .dark blocks — our variables remain
+   the single source of truth.
+
+   Naming note: shadcn's "accent" (subtle hover surface) is intentionally
+   mapped to --border-soft, NOT to our indigo --accent; shadcn's "primary"
+   carries the indigo accent role instead.
+--------------------------------------------------------------------------- */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-card: var(--panel);
+  --color-card-foreground: var(--fg);
+  --color-popover: var(--panel);
+  --color-popover-foreground: var(--fg);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-secondary: var(--panel);
+  --color-secondary-foreground: var(--fg);
+  --color-muted: var(--border-soft);
+  --color-muted-foreground: var(--fg-muted);
+  --color-accent: var(--border-soft);
+  --color-accent-foreground: var(--fg);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--accent);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font);
+  --font-mono: var(--mono);
+}
+
 :root {
+  /* Base corner radius for shadcn components (see @theme inline above). */
+  --radius: 0.5rem;
   /* 中性灰（Radix slate 派生）：浅色 */
   --bg: #ffffff;
   --panel: #fafafa;
@@ -38,4 +91,12 @@
   --warn: #fbbf24; --warn-soft: rgb(251 191 36 / 0.12); --warn-fg: #fde68a;
   --danger: #f87171; --danger-soft: rgb(248 113 113 / 0.12); --danger-fg: #fca5a5;
   --info: #60a5fa; --info-soft: rgb(96 165 250 / 0.12); --info-fg: #93c5fd;
+}
+
+/* Base document styles over the tokens (Tailwind preflight handles resets). */
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
 }
