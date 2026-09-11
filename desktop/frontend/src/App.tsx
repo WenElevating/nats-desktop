@@ -6,6 +6,7 @@ import { applyTheme, ThemeMode } from "./app/theme";
 import { setLanguage, useTranslation } from "./app/i18n";
 import { Shell, type PageId } from "./app/shell";
 import { ConnStateProvider, useConnState } from "./app/connstate";
+import { useUpdateNotice } from "./app/update";
 import { CommandPalette } from "./app/command";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { ConnectionsPage } from "./features/connections/ConnectionsPage";
@@ -113,6 +114,8 @@ function AppBody() {
   // the create dialog on the connections tab exactly once.
   const [createSignal, setCreateSignal] = useState(0);
   const conn = useConnState();
+  // Startup update check result (Task 12): one dismissible toast per run.
+  useUpdateNotice();
 
   const refreshContexts = useCallback(async () => {
     try {
