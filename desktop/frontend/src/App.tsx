@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Events, System } from "@wailsio/runtime";
+import { toast } from "sonner";
 import { applyTheme, ThemeMode } from "./app/theme";
 import { setLanguage, useTranslation } from "./app/i18n";
 import { Shell, type PageId } from "./app/shell";
@@ -131,10 +132,13 @@ function AppBody() {
   };
 
   // Switch the live connection to the named context; progress and failures
-  // surface through conn:state events (banner / footer), so only the error
-  // itself needs logging here.
+  // surface through conn:state events (banner / footer). An immediate
+  // rejection (e.g. context unloadable) toasts (spec §18.5).
   const switchContext = (name: string) => {
-    Connect(name).catch((err) => console.error("connect failed:", err));
+    Connect(name).catch((err) => {
+      console.error("connect failed:", err);
+      toast.error(t("connections.connectFailed", { error: err instanceof Error ? err.message : String(err) }));
+    });
   };
 
   return (

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Eye, EyeOff } from "lucide-react";
+import { toast } from "sonner";
 import { useTranslation } from "../../app/i18n";
 import {
   CheckConnection,
@@ -143,6 +144,10 @@ const collectErrors = (
   return out;
 };
 
+/** Error → display text for toasts (Wails rejections are Error instances). */
+const errText = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
+
 export interface ConnectionsPageProps {
   /** Name of the currently active context ("" = none). Drives the active
    * marker, the delete-active confirm text, and the disconnect-first flow. */
@@ -180,6 +185,11 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
   // Delete confirm state.
   const [deleting, setDeleting] = useState<ContextSummary | null>(null);
 
+  // Edit-prefill race guard: bumped on every openNew/openEdit; a
+  // GetContextForm resolution only applies while its epoch is current, so
+  // a stale resolution can never clobber a newer dialog's draft.
+  const editEpoch = useRef(0);
+
   const refresh = useCallback(async () => {
     try {
       setList((await ListContexts()) ?? []);
@@ -203,6 +213,7 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
   const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
 
   const openNew = () => {
+    editEpoch.current += 1; // invalidate any in-flight edit prefill
     setEditing(false);
     setDraft(emptyDraft());
     setErrors({});
@@ -212,6 +223,7 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
   };
 
   const openEdit = (c: ContextSummary) => {
+    const epoch = ++editEpoch.current;
     setEditing(true);
     // Prefill from the summary at once, then refine with the full stored
     // form (Task 6 caution: the edit form must show stored values so
@@ -229,7 +241,7 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
     setFormOpen(true);
     GetContextForm(c.name)
       .then((form) => {
-        if (form) setDraft(fromWire(form, c.auth_type));
+        if (form && editEpoch.current === epoch) setDraft(fromWire(form, c.auth_type));
       })
       .catch((err) => console.error("load context form failed:", err));
   };
@@ -248,10 +260,11 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
     if (!validate()) return;
     try {
       await SaveContext(toWire(draft));
-      setFormOpen(false);
+      setFormOpen(false); // close only on success — failures toast instead
       afterMutation();
     } catch (err) {
       console.error("save context failed:", err);
+      toast.error(t("connections.saveFailed", { error: errText(err) }));
     }
   };
 
@@ -270,22 +283,27 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
   };
 
   const handleConnect = (name: string) => {
-    // State feedback arrives via conn:state events (Task 8/9 wiring).
-    Connect(name).catch((err) => console.error("connect failed:", err));
+    // State feedback arrives via conn:state events (Task 8/9 wiring); the
+    // immediate rejection (e.g. context unloadable) toasts.
+    Connect(name).catch((err) => {
+      console.error("connect failed:", err);
+      toast.error(t("connections.connectFailed", { error: errText(err) }));
+    });
   };
 
   const confirmDelete = async () => {
     const target = deleting;
-    setDeleting(null);
     if (!target) return;
     try {
       if (target.name === activeContext) {
         await Disconnect(); // active context: close the live connection first
       }
       await DeleteContext(target.name);
+      setDeleting(null); // close only on success — failures toast instead
       afterMutation();
     } catch (err) {
       console.error("delete context failed:", err);
+      toast.error(t("connections.deleteFailed", { error: errText(err) }));
     }
   };
 
@@ -299,11 +317,12 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
     setCopyError("");
     try {
       await CopyContext(copySrc, name);
-      setCopySrc(null);
+      setCopySrc(null); // close only on success — failures toast instead
       setCopyName("");
       afterMutation();
     } catch (err) {
       console.error("copy context failed:", err);
+      toast.error(t("connections.copyFailed", { error: errText(err) }));
     }
   };
 

@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { it, expect, vi, beforeEach } from "vitest";
+import { toast } from "sonner";
 import { ConnectionsPage } from "../src/features/connections/ConnectionsPage";
 import {
   CheckConnection,
@@ -31,6 +32,8 @@ vi.mock("../src/lib/bindings", () => ({
   EnvWarnings: vi.fn(),
   GetContextForm: vi.fn(),
 }));
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 const summary = (over: Partial<ReturnType<typeof ListContexts>[number]> = {}) => ({
   name: "dev",
@@ -182,4 +185,21 @@ it("connect action calls the Connect binding", async () => {
   await screen.findByText("dev");
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
   await waitFor(() => expect(Connect).toHaveBeenCalledWith("dev"));
+});
+
+// ---- Fix round 1: backend failures toast (spec §18.5) ----
+
+it("save failure toasts the server error and keeps the dialog open", async () => {
+  vi.mocked(SaveContext).mockRejectedValue(new Error("boom"));
+  render(<ConnectionsPage />);
+  fireEvent.click(screen.getByRole("button", { name: "New context" }));
+  await userEvent.type(await screen.findByLabelText("Name"), "prod");
+  fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "nats://prod:4222" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(toast.error).mock.calls[0][0]).toContain("boom");
+  // Dialog stays open so the user can retry or adjust (no silent close).
+  expect(screen.getByLabelText("Name")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
 });
