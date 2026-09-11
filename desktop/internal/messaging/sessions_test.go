@@ -1,0 +1,1117 @@
+package messaging
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/WenElevating/nats-desktop/desktop/internal/connections"
+	"github.com/WenElevating/nats-desktop/desktop/internal/testutil"
+	"github.com/nats-io/jsm.go/natscontext"
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
+)
+
+// Counting conventions for the session tests (spec §6.4 / AC-007):
+//
+//   - Total      = messages received by the session (running receipts; per the
+//     spec counting continues while paused, but the displayed value freezes).
+//   - Emitted    = messages handed to the pusher (recorder-visible session:msgs).
+//   - Dropped    = ring evictions (oldest dropped when the buffer is full).
+//   - BufferUsed = current ring occupancy.
+//
+// In realtime mode every received message is BOTH handed to the pusher and
+// written to the ring, so the brief's one-line invariant decomposes into the
+// exact two-sided conservation asserted below:
+//
+//	Total == Emitted                  (push side: nothing vanishes before push)
+//	Total == Dropped + BufferUsed     (buffer side: every message is resident or evicted)
+//
+// Both sides are additionally cross-checked against the real ring counters.
+
+// --- recorder -----------------------------------------------------------------
+
+// emitRecorder captures every emit call from the SessionManager. Emissions
+// arrive on nats.go client goroutines (and the batch-pusher timer goroutine),
+// so all access is mutex-guarded. timedBatch is reused from pipeline_test.go.
+type emitRecorder struct {
+	mu      sync.Mutex
+	names   []string
+	batches []timedBatch              // every session:msgs batch, in emit order
+	states  map[string][]SessionState // per session id, in emit order
+	conn    []connections.StateEvent  // conn:state payloads seen
+}
+
+func newEmitRecorder() *emitRecorder {
+	return &emitRecorder{states: map[string][]SessionState{}}
+}
+
+func (r *emitRecorder) emit(name string, data any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.names = append(r.names, name)
+	switch v := data.(type) {
+	case []MsgOut:
+		r.batches = append(r.batches, timedBatch{b: v, at: time.Now()})
+	case SessionState:
+		r.states[v.ID] = append(r.states[v.ID], v)
+	case connections.StateEvent:
+		r.conn = append(r.conn, v)
+	}
+}
+
+// msgCount returns how many messages of session id have been emitted so far.
+func (r *emitRecorder) msgCount(id string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, tb := range r.batches {
+		if len(tb.b) > 0 && tb.b[0].SessionID == id {
+			n += len(tb.b)
+		}
+	}
+	return n
+}
+
+// emittedPayloads returns the base64 payloads of all messages emitted for id,
+// in emit order.
+func (r *emitRecorder) emittedPayloads(id string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, tb := range r.batches {
+		if len(tb.b) == 0 || tb.b[0].SessionID != id {
+			continue
+		}
+		for _, m := range tb.b {
+			out = append(out, m.PayloadB64)
+		}
+	}
+	return out
+}
+
+// countPayloadPrefix counts emitted payloads of id whose DECODED payload
+// starts with the given prefix.
+func (r *emitRecorder) countPayloadPrefix(id, prefix string) int {
+	n := 0
+	for _, b64 := range r.emittedPayloads(id) {
+		if raw, err := base64.StdEncoding.DecodeString(b64); err == nil && strings.HasPrefix(string(raw), prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func (r *emitRecorder) sawConnState(s connections.State) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.conn {
+		if ev.State == s {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionEventCount counts session:msgs + session:state emissions (conn:state
+// events are legitimate on a live stack and excluded).
+func (r *emitRecorder) sessionEventCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, name := range r.names {
+		if name == EventSessionMsgs || name == EventSessionState {
+			n++
+		}
+	}
+	return n
+}
+
+// --- fixtures -----------------------------------------------------------------
+
+// newSessionStack builds a connected connections.Manager plus a
+// SessionManager wired the way main.go will wire it in Task 7: the manager's
+// emit closure forwards conn:state events into sm.NotifyConnState (side-band),
+// and session events are captured by the recorder.
+func newSessionStack(t *testing.T, url string, defaultBuf int, defaultPush PushMode) (*connections.Manager, *SessionManager, *emitRecorder) {
+	t.Helper()
+	reg := natscontext.NewRegistry(natscontext.NewFileBackendAt(t.TempDir()))
+	rec := newEmitRecorder()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	var sm *SessionManager
+	mgr := connections.NewManager(reg, log, func(name string, data any) {
+		rec.emit(name, data)
+		if ev, ok := data.(connections.StateEvent); ok && sm != nil {
+			sm.NotifyConnState(ev) // Task 7 side-band wiring (non-blocking)
+		}
+	})
+	sm = NewSessionManager(mgr, log, rec.emit, defaultBuf, defaultPush)
+
+	store := connections.NewStore(reg)
+	if err := store.Save(context.Background(), connections.ContextForm{Name: "sess", URL: url}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Connect(context.Background(), "sess"); err != nil {
+		t.Fatal(err)
+	}
+	waitManagerConnected(t, mgr, 10*time.Second)
+	t.Cleanup(mgr.Disconnect) // LIFO: CloseAll runs first, then Disconnect
+	t.Cleanup(sm.CloseAll)
+	return mgr, sm, rec
+}
+
+func waitManagerConnected(t *testing.T, mgr *connections.Manager, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if mgr.Snapshot().State == connections.StateConnected {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("manager not connected within %v (state=%s)", timeout, mgr.Snapshot().State)
+}
+
+func findState(sm *SessionManager, id string) (SessionState, bool) {
+	for _, st := range sm.List() {
+		if st.ID == id {
+			return st, true
+		}
+	}
+	return SessionState{}, false
+}
+
+// findState2 is findState with a hard failure.
+func findState2(t *testing.T, sm *SessionManager, id string) SessionState {
+	t.Helper()
+	st, ok := findState(sm, id)
+	if !ok {
+		t.Fatalf("session %s missing from List", id)
+	}
+	return st
+}
+
+func waitSessionTotal(t *testing.T, sm *SessionManager, id string, want int64, timeout time.Duration) SessionState {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if st, ok := findState(sm, id); ok && st.Total >= want {
+			return st
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	st, _ := findState(sm, id)
+	t.Fatalf("session %s total never reached %d within %v (last: %+v)", id, want, timeout, st)
+	return SessionState{}
+}
+
+// waitQuiescent polls until the session's rate drains to 0 and its total has
+// been stable for two consecutive samples (all in-flight messages delivered).
+func waitQuiescent(t *testing.T, sm *SessionManager, id string, timeout time.Duration) SessionState {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	last := int64(-1)
+	for time.Now().Before(deadline) {
+		if st, ok := findState(sm, id); ok {
+			if st.RateMsgS == 0 && st.Total == last {
+				return st
+			}
+			last = st.Total
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	st, _ := findState(sm, id)
+	t.Fatalf("session %s never quiesced within %v (last: %+v)", id, timeout, st)
+	return SessionState{}
+}
+
+// getSession returns the internal session for white-box assertions (tests live
+// in the same package).
+func getSession(t *testing.T, sm *SessionManager, id string) *session {
+	t.Helper()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	s, ok := sm.sessions[id]
+	if !ok {
+		t.Fatalf("white-box: session %s not in manager map", id)
+	}
+	return s
+}
+
+// burstPublish publishes count messages in bursts of perBurst every interval
+// and flushes per burst; returns the number published.
+func burstPublish(t *testing.T, nc *nats.Conn, subject string, count, perBurst int, interval time.Duration, payload []byte) int {
+	t.Helper()
+	n := 0
+	for n < count {
+		for i := 0; i < perBurst && n < count; i++ {
+			n++
+			if err := nc.Publish(subject, payload); err != nil {
+				t.Errorf("publish: %v", err)
+				return n
+			}
+		}
+		if err := nc.Flush(); err != nil {
+			t.Errorf("flush: %v", err)
+			return n
+		}
+		if n < count {
+			time.Sleep(interval)
+		}
+	}
+	return n
+}
+
+// floodPublish publishes perBurst messages every interval for the given
+// duration (full-rate flood); returns the number published. Safe to call from
+// a goroutine (uses t.Errorf only).
+func floodPublish(t *testing.T, nc *nats.Conn, subject string, perBurst int, interval, dur time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(dur)
+	n := 0
+	payload := make([]byte, 64)
+	for time.Now().Before(deadline) {
+		for i := 0; i < perBurst; i++ {
+			n++
+			if err := nc.Publish(subject, payload); err != nil {
+				t.Errorf("flood publish: %v", err)
+				return n
+			}
+		}
+		if err := nc.Flush(); err != nil {
+			t.Errorf("flood flush: %v", err)
+			return n
+		}
+		time.Sleep(interval)
+	}
+	return n
+}
+
+// --- scenario functions (parameterized over server URL) -----------------------
+
+// scenarioSessionRealtime: AC-005 Go half. ~100 msg/s for 2s -> Total ~200,
+// RateMsgS > 80, realtime emits are single-element batches, seq starts at 1
+// and is monotonic.
+func scenarioSessionRealtime(t *testing.T, url string) {
+	t.Helper()
+	_, sm, rec := newSessionStack(t, url, 10000, PushRealtime)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "rt." + uniqueSuffix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.State != SessionRunning {
+		t.Fatalf("initial state = %q, want %q", st.State, SessionRunning)
+	}
+	if st.PushMode != PushRealtime {
+		t.Fatalf("default push mode = %q, want realtime", st.PushMode)
+	}
+	if st.ID != "sub-1" {
+		t.Fatalf("first session id = %q, want sub-1", st.ID)
+	}
+	if st.BufferUsed != 0 || st.Total != 0 || st.Dropped != 0 {
+		t.Fatalf("initial counters not zero: %+v", st)
+	}
+
+	nc := connect(t, url)
+	published := burstPublish(t, nc, st.Subject, 200, 10, 100*time.Millisecond, []byte("rt"))
+
+	sample := waitSessionTotal(t, sm, st.ID, 180, 10*time.Second)
+	if sample.RateMsgS <= 80 {
+		t.Fatalf("RateMsgS = %v, want > 80 while streaming at ~100 msg/s", sample.RateMsgS)
+	}
+	if sample.Total < 180 || sample.Total > 220 {
+		t.Fatalf("Total = %d, want ~%d", sample.Total, published)
+	}
+
+	final := waitQuiescent(t, sm, st.ID, 10*time.Second)
+	if final.Total != int64(published) {
+		t.Fatalf("final Total = %d, want %d (no loss on live loopback conns)", final.Total, published)
+	}
+
+	// Realtime mode: every batch is a single-element array; seq starts at 1
+	// and increases monotonically in emit order.
+	rec.mu.Lock()
+	var seqs []int64
+	for _, tb := range rec.batches {
+		if len(tb.b) == 0 || tb.b[0].SessionID != st.ID {
+			continue
+		}
+		if len(tb.b) != 1 {
+			rec.mu.Unlock()
+			t.Fatalf("realtime batch has %d elements, want exactly 1", len(tb.b))
+		}
+		seqs = append(seqs, tb.b[0].Seq)
+	}
+	rec.mu.Unlock()
+	if len(seqs) != published {
+		t.Fatalf("emitted %d messages, want %d", len(seqs), published)
+	}
+	for i, seq := range seqs {
+		if seq != int64(i+1) {
+			t.Fatalf("seqs[%d] = %d, want %d (must start at 1 and be monotonic)", i, seq, i+1)
+		}
+	}
+
+	// Only session and conn events on the wire.
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, n := range rec.names {
+		if n != EventSessionMsgs && n != EventSessionState && n != connections.EventConnState {
+			t.Fatalf("unexpected event name %q", n)
+		}
+	}
+}
+
+// scenarioSessionPauseResume: AC-006 + Global Constraint #3. While paused the
+// display counters freeze, no session:msgs are emitted, rate reads 0 — but the
+// subscription keeps receiving, internal counting continues and the sequence
+// counter keeps advancing (the ring scrolls to latest). Resume continues from
+// newest with NO replay of paused-period messages.
+func scenarioSessionPauseResume(t *testing.T, url string) {
+	t.Helper()
+	_, sm, rec := newSessionStack(t, url, 10000, PushRealtime)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "pause." + uniqueSuffix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := connect(t, url)
+
+	published := burstPublish(t, nc, st.Subject, 30, 10, 30*time.Millisecond, []byte("pre"))
+	waitSessionTotal(t, sm, st.ID, int64(published), 10*time.Second)
+	waitQuiescent(t, sm, st.ID, 10*time.Second)
+
+	if err := sm.Pause(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Pause(st.ID); err != nil { // idempotent
+		t.Fatalf("second Pause: %v", err)
+	}
+	frozen := findState2(t, sm, st.ID)
+	if frozen.State != SessionPaused {
+		t.Fatalf("state after Pause = %q, want paused", frozen.State)
+	}
+	if frozen.RateMsgS != 0 {
+		t.Fatalf("paused RateMsgS = %v, want 0 (AC-006: 速率归 0)", frozen.RateMsgS)
+	}
+	if frozen.Total != int64(published) {
+		t.Fatalf("paused Total = %d, want %d", frozen.Total, published)
+	}
+	emitsAtPause := rec.msgCount(st.ID)
+	pausedSeqStart := getSession(t, sm, st.ID).seq.Load() // == published
+
+	// Publish 50 messages while paused: display frozen, no emits, but the
+	// subscription keeps receiving and seq keeps advancing.
+	during := burstPublish(t, nc, st.Subject, 50, 10, 20*time.Millisecond, []byte("gap"))
+	time.Sleep(300 * time.Millisecond) // let them arrive and the display "would" update
+
+	after := findState2(t, sm, st.ID)
+	if after != frozen {
+		t.Fatalf("display counters moved during pause:\n before %+v\n after  %+v", frozen, after)
+	}
+	if got := rec.msgCount(st.ID); got != emitsAtPause {
+		t.Fatalf("emits during pause: %d -> %d, want frozen", emitsAtPause, got)
+	}
+	s := getSession(t, sm, st.ID)
+	if got := s.seq.Load(); got < pausedSeqStart+int64(during) {
+		t.Fatalf("seq during pause = %d, want >= %d (subscription must keep receiving)", got, pausedSeqStart+int64(during))
+	}
+	if got := s.total; got != int64(published+during) {
+		t.Fatalf("internal total during pause = %d, want %d (spec: 暂停时继续计数)", got, published+during)
+	}
+	pausedSeqEnd := s.seq.Load()
+
+	// Resume: continue from newest, NO replay of paused-period messages.
+	if err := sm.Resume(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	post := burstPublish(t, nc, st.Subject, 10, 5, 20*time.Millisecond, []byte("post"))
+	final := waitQuiescent(t, sm, st.ID, 10*time.Second)
+	if final.Total != int64(published+during+post) {
+		t.Fatalf("final Total = %d, want %d (paused receipts still counted)", final.Total, published+during+post)
+	}
+	if final.State != SessionRunning {
+		t.Fatalf("state after Resume = %q, want running", final.State)
+	}
+
+	// Emitted messages: exactly the pre-pause 30 plus the post-resume 10; the
+	// 50 paused-period messages are never emitted (不回补), and post-resume
+	// seqs are strictly greater than every paused-period seq.
+	emittedSeqs := emittedSeqsOf(rec, st.ID)
+	if len(emittedSeqs) != published+post {
+		t.Fatalf("emitted %d messages, want %d (paused-period messages must not be replayed)", len(emittedSeqs), published+post)
+	}
+	for i, seq := range emittedSeqs {
+		if i < published && seq > pausedSeqStart {
+			t.Fatalf("pre-pause emitted seq %d > pause start %d", seq, pausedSeqStart)
+		}
+		if i >= published && seq <= pausedSeqEnd {
+			t.Fatalf("post-resume emitted seq %d <= paused-period max %d (replay!)", seq, pausedSeqEnd)
+		}
+	}
+	if got := s.emitted.Load(); got != int64(published+post) {
+		t.Fatalf("internal emitted = %d, want %d", got, published+post)
+	}
+
+	// Closed sessions refuse control operations.
+	if err := sm.Close(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Pause(st.ID); err == nil {
+		t.Fatal("Pause on closed session must fail")
+	}
+	if err := sm.Resume(st.ID); err == nil {
+		t.Fatal("Resume on closed session must fail")
+	}
+	if err := sm.Clear(st.ID); err == nil {
+		t.Fatal("Clear on closed session must fail")
+	}
+}
+
+// emittedSeqsOf collects all emitted message seqs of a session in emit order.
+func emittedSeqsOf(rec *emitRecorder, id string) []int64 {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	var seqs []int64
+	for _, tb := range rec.batches {
+		if len(tb.b) == 0 || tb.b[0].SessionID != id {
+			continue
+		}
+		for _, m := range tb.b {
+			seqs = append(seqs, m.Seq)
+		}
+	}
+	return seqs
+}
+
+// scenarioSessionFlood: AC-007 Go half. Flood at ~5000 msg/s, buffer=1000.
+// Asserts Dropped>0, the two-sided conservation invariant, real buffer
+// occupancy, rate fallback to ~0 after the flood, and that pausing mid-flood
+// stops emits immediately while the ring keeps scrolling. wave2 enables the
+// pause-during-flood phase; with wave2=false only phase 1 runs.
+func scenarioSessionFlood(t *testing.T, url string, floodDur time.Duration, wave2 bool) {
+	t.Helper()
+	_, sm, rec := newSessionStack(t, url, 10000, PushRealtime)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "flood." + uniqueSuffix(), BufferSize: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := connect(t, url)
+
+	// --- phase 1: uninterrupted flood, exact accounting ---
+	published1 := floodPublish(t, nc, st.Subject, 100, 20*time.Millisecond, floodDur) // ~5000/s
+	final := waitQuiescent(t, sm, st.ID, 15*time.Second)
+	g := getSession(t, sm, st.ID)
+
+	achieved := float64(final.Total) / floodDur.Seconds()
+	t.Logf("flood wave 1: published=%d received=%d dropped=%d buffer_used=%d achieved=%.0f msg/s (target 5000)",
+		published1, final.Total, final.Dropped, final.BufferUsed, achieved)
+
+	if final.Dropped <= 0 {
+		t.Fatalf("Dropped = %d, want > 0 for a %d-message flood into a %d buffer", final.Dropped, published1, 1000)
+	}
+	if final.Total != int64(published1) {
+		t.Fatalf("Total = %d, want %d (published)", final.Total, published1)
+	}
+	if final.Total != final.Dropped+int64(final.BufferUsed) {
+		t.Fatalf("buffer conservation broken: Total %d != Dropped %d + BufferUsed %d", final.Total, final.Dropped, final.BufferUsed)
+	}
+	if final.BufferUsed != 1000 {
+		t.Fatalf("BufferUsed = %d, want 1000 (buffer saturated)", final.BufferUsed)
+	}
+	if got := g.emitted.Load(); got != final.Total {
+		t.Fatalf("Emitted = %d, want Total %d (every received message must reach the pusher)", got, final.Total)
+	}
+	if got := rec.msgCount(st.ID); int64(got) != final.Total {
+		t.Fatalf("recorder saw %d messages, want %d", got, final.Total)
+	}
+	// Cross-check the display counters against the REAL ring state.
+	if got := g.ring.Dropped(); got != final.Dropped {
+		t.Fatalf("ring.Dropped() = %d, want %d (display counter must match the ring)", got, final.Dropped)
+	}
+	if got := len(g.ring.Snapshot(1 << 20)); got != 1000 {
+		t.Fatalf("real ring occupancy = %d, want 1000", got)
+	}
+	if final.RateMsgS > 50 {
+		t.Fatalf("RateMsgS = %v after flood drained, want ~0 (AC-007)", final.RateMsgS)
+	}
+
+	if !wave2 {
+		return
+	}
+
+	// --- phase 2: pause during flood -> emits stop immediately, ring scrolls ---
+	pubDone := make(chan int, 1)
+	go func() { pubDone <- floodPublish(t, nc, st.Subject, 100, 20*time.Millisecond, floodDur) }()
+	time.Sleep(floodDur / 3) // flood is flowing
+
+	if err := sm.Pause(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	frozen := findState2(t, sm, st.ID)
+	if frozen.State != SessionPaused || frozen.RateMsgS != 0 {
+		t.Fatalf("paused snapshot wrong: %+v", frozen)
+	}
+	time.Sleep(floodDur / 6)
+	emitsC1 := rec.msgCount(st.ID)
+	seqC1 := g.seq.Load()
+	time.Sleep(floodDur / 3) // still inside the flood window: arrivals continue
+	emitsC2 := rec.msgCount(st.ID)
+	seqC2 := g.seq.Load()
+
+	if emitsC2 != emitsC1 {
+		t.Fatalf("emits continued after pause: %d -> %d within 300ms", emitsC1, emitsC2)
+	}
+	if seqC2 <= seqC1 {
+		t.Fatalf("ring not scrolling during pause: seq %d -> %d", seqC1, seqC2)
+	}
+	if after := findState2(t, sm, st.ID); after != frozen {
+		t.Fatalf("display moved during pause+flood:\n frozen %+v\n after  %+v", frozen, after)
+	}
+
+	published2 := <-pubDone
+	// The flood has fully drained by now (Flush + duration slack): no emit may
+	// have happened between the last sample and Resume.
+	if emitsC3 := rec.msgCount(st.ID); emitsC3 != emitsC2 {
+		t.Fatalf("emits during pause after flood drained: %d -> %d", emitsC2, emitsC3)
+	}
+	if err := sm.Resume(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	resumeSeq := g.seq.Load()
+	published3 := burstPublish(t, nc, st.Subject, 10, 10, 20*time.Millisecond, []byte("post"))
+
+	drained := waitQuiescent(t, sm, st.ID, 15*time.Second)
+	t.Logf("flood wave 2: published=%d (paused mid-flood) + %d post-resume; final total=%d dropped=%d",
+		published2, published3, drained.Total, drained.Dropped)
+
+	wantTotal := int64(published1 + published2 + published3)
+	if drained.Total != wantTotal {
+		t.Fatalf("final Total = %d, want %d (paused-period receipts still counted, spec 继续计数)", drained.Total, wantTotal)
+	}
+	if drained.Dropped != drained.Total-int64(1000) || drained.BufferUsed != 1000 {
+		t.Fatalf("final accounting wrong: %+v (want Dropped=Total-1000, BufferUsed=1000)", drained)
+	}
+
+	// No replay across the pause: exactly published3 messages are emitted after
+	// the pause, and every one of them carries a seq strictly greater than the
+	// highest seq assigned up to the Resume instant (paused-period seqs never
+	// appear in the emit stream).
+	rec.mu.Lock()
+	var postSeqs []int64
+	seen := 0
+	for _, tb := range rec.batches {
+		if len(tb.b) == 0 || tb.b[0].SessionID != st.ID {
+			continue
+		}
+		for _, m := range tb.b {
+			if seen >= emitsC2 {
+				if m.Seq <= resumeSeq {
+					rec.mu.Unlock()
+					t.Fatalf("post-resume emitted seq %d <= resume seq %d (paused-period replay!)", m.Seq, resumeSeq)
+				}
+				postSeqs = append(postSeqs, m.Seq)
+			}
+			seen++
+		}
+	}
+	rec.mu.Unlock()
+	if len(postSeqs) != published3 {
+		t.Fatalf("post-resume emitted %d messages, want exactly %d (no pause-period replay)", len(postSeqs), published3)
+	}
+}
+
+// scenarioSessionBatch: batch mode coalesces into multi-element batches with
+// ~100ms timer spacing and never exceeds 500 per batch.
+func scenarioSessionBatch(t *testing.T, url string) {
+	t.Helper()
+	_, sm, rec := newSessionStack(t, url, 10000, PushBatch)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "batch." + uniqueSuffix(), PushMode: PushBatch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.PushMode != PushBatch {
+		t.Fatalf("PushMode = %q, want batch", st.PushMode)
+	}
+
+	nc := connect(t, url)
+	published := burstPublish(t, nc, st.Subject, 50, 5, 100*time.Millisecond, []byte("bt")) // 5 msgs / 100ms
+	time.Sleep(400 * time.Millisecond)                                                      // drain the final partial batch
+
+	final := waitQuiescent(t, sm, st.ID, 10*time.Second)
+	if final.Total != int64(published) {
+		t.Fatalf("Total = %d, want %d", final.Total, published)
+	}
+
+	rec.mu.Lock()
+	var mine []timedBatch
+	for _, tb := range rec.batches {
+		if len(tb.b) > 0 && tb.b[0].SessionID == st.ID {
+			mine = append(mine, tb)
+		}
+	}
+	rec.mu.Unlock()
+	if len(mine) < 3 {
+		t.Fatalf("got %d batches, want >= 3 for %d messages at 100ms cadence", len(mine), published)
+	}
+	maxLen, got := 0, 0
+	for _, tb := range mine {
+		if len(tb.b) > maxLen {
+			maxLen = len(tb.b)
+		}
+		if len(tb.b) > batchMaxMsgs {
+			t.Fatalf("batch len %d exceeds %d", len(tb.b), batchMaxMsgs)
+		}
+		got += len(tb.b)
+	}
+	if got != published {
+		t.Fatalf("batched %d messages, want %d", got, published)
+	}
+	if maxLen < 2 {
+		t.Fatalf("max batch len = %d, want >= 2 (batch mode must coalesce)", maxLen)
+	}
+	for i := 1; i < len(mine); i++ {
+		gap := mine[i].at.Sub(mine[i-1].at)
+		if gap < 50*time.Millisecond || gap > 400*time.Millisecond {
+			t.Fatalf("batch gap[%d] = %v, want ~100ms (50..400ms tolerance)", i, gap)
+		}
+	}
+}
+
+// scenarioSessionClear: Clear resets the display counters and the list while
+// the subscription keeps receiving (new messages counted fresh).
+func scenarioSessionClear(t *testing.T, url string) {
+	t.Helper()
+	_, sm, _ := newSessionStack(t, url, 10000, PushRealtime)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "clear." + uniqueSuffix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := connect(t, url)
+
+	published := burstPublish(t, nc, st.Subject, 15, 5, 20*time.Millisecond, []byte("c1"))
+	waitQuiescent(t, sm, st.ID, 10*time.Second)
+	before := findState2(t, sm, st.ID)
+	if before.Total != int64(published) {
+		t.Fatalf("pre-clear Total = %d, want %d", before.Total, published)
+	}
+
+	if err := sm.Clear(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	cleared := findState2(t, sm, st.ID)
+	if cleared.Total != 0 || cleared.Dropped != 0 || cleared.BufferUsed != 0 {
+		t.Fatalf("after Clear: %+v, want Total/Dropped/BufferUsed all zero", cleared)
+	}
+	if cleared.State != SessionRunning {
+		t.Fatalf("state after Clear = %q, want running (subscription must not stop)", cleared.State)
+	}
+
+	published2 := burstPublish(t, nc, st.Subject, 8, 4, 20*time.Millisecond, []byte("c2"))
+	final := waitQuiescent(t, sm, st.ID, 10*time.Second)
+	if final.Total != int64(published2) {
+		t.Fatalf("post-clear Total = %d, want %d (subscription must keep receiving)", final.Total, published2)
+	}
+	if final.BufferUsed != published2 {
+		t.Fatalf("post-clear BufferUsed = %d, want %d", final.BufferUsed, published2)
+	}
+	g := getSession(t, sm, st.ID)
+	if got := len(g.ring.Snapshot(1 << 20)); got != published2 {
+		t.Fatalf("real ring occupancy after Clear+receive = %d, want %d (ring must be reset)", got, published2)
+	}
+}
+
+// --- embedded-fixture tests (CI-hermetic path) --------------------------------
+
+func TestSessionRealtimeReceives(t *testing.T) {
+	scenarioSessionRealtime(t, testutil.StartJSServer(t))
+}
+
+func TestSessionPauseResumeSemantics(t *testing.T) {
+	scenarioSessionPauseResume(t, testutil.StartJSServer(t))
+}
+
+func TestSessionFloodSmoke(t *testing.T) {
+	scenarioSessionFlood(t, testutil.StartJSServer(t), 600*time.Millisecond, false)
+}
+
+func TestSessionFloodPauseSmoke(t *testing.T) {
+	scenarioSessionFlood(t, testutil.StartJSServer(t), 600*time.Millisecond, true)
+}
+
+func TestSessionBatchMode(t *testing.T) {
+	scenarioSessionBatch(t, testutil.StartJSServer(t))
+}
+
+func TestSessionClear(t *testing.T) {
+	scenarioSessionClear(t, testutil.StartJSServer(t))
+}
+
+// TestSessionInvalidSubject: whitespace subjects are rejected with an
+// E-VALIDATION-style error BEFORE any network call — no session is created,
+// nothing is emitted, and it works even with no connection at all.
+func TestSessionInvalidSubject(t *testing.T) {
+	reg := natscontext.NewRegistry(natscontext.NewFileBackendAt(t.TempDir()))
+	rec := newEmitRecorder()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := connections.NewManager(reg, log, rec.emit) // never connected
+	sm := NewSessionManager(mgr, log, rec.emit, 10000, PushRealtime)
+
+	for _, subj := range []string{"foo bar", " a", "a ", "", "a\tb", "a\nb"} {
+		st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: subj})
+		if err == nil {
+			t.Fatalf("subject %q must be rejected", subj)
+		}
+		if st.ID != "" || st.State != "" {
+			t.Fatalf("subject %q: rejected session must return zero state, got %+v", subj, st)
+		}
+	}
+	if sessions := sm.List(); len(sessions) != 0 {
+		t.Fatalf("List after rejects = %+v, want empty", sessions)
+	}
+	if n := rec.sessionEventCount(); n != 0 {
+		t.Fatalf("rejected CreateSession emitted %d session events, want nothing", n)
+	}
+
+	// Also rejected on a live stack (validation precedes the network path).
+	_, sm2, rec2 := newSessionStack(t, testutil.StartJSServer(t), 10000, PushRealtime)
+	if _, err := sm2.CreateSession(context.Background(), SessionSpec{Subject: "has space"}); err == nil {
+		t.Fatal("connected stack must reject whitespace subject too")
+	}
+	if sessions := sm2.List(); len(sessions) != 0 {
+		t.Fatalf("rejected session must not be registered: %+v", sessions)
+	}
+	if n := rec2.sessionEventCount(); n != 0 {
+		t.Fatalf("rejected CreateSession emitted %d session events, want nothing", n)
+	}
+}
+
+// TestSessionJSPositionValidation pins the JSPosition closed set. Modes that
+// require JetStream replay are a Task 5 seam and are rejected (not silently
+// mis-handled) until then; nil and "new" take the core path.
+func TestSessionJSPositionValidation(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	_, sm, _ := newSessionStack(t, url, 10000, PushRealtime)
+	sfx := uniqueSuffix()
+
+	// Closed-set violations.
+	if _, err := sm.CreateSession(context.Background(), SessionSpec{
+		Subject: "js.bad." + sfx, JSPosition: &JSPosition{Mode: "bogus"}}); err == nil {
+		t.Fatal(`js_position mode "bogus" must be rejected`)
+	}
+
+	// JetStream-replay modes are not implemented in Task 4 (Task 5 seam).
+	for _, mode := range []string{"all", "start_sequence", "start_time"} {
+		if _, err := sm.CreateSession(context.Background(), SessionSpec{
+			Subject: "js." + mode + "." + sfx, JSPosition: &JSPosition{Mode: mode, StartSeq: 5}}); err == nil {
+			t.Fatalf("js_position mode %q must be rejected until Task 5 lands", mode)
+		}
+	}
+
+	// nil and "new" take the core path and start receiving.
+	st, err := sm.CreateSession(context.Background(), SessionSpec{
+		Subject: "js.new." + sfx, JSPosition: &JSPosition{Mode: "new"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := connect(t, url)
+	burstPublish(t, nc, st.Subject, 3, 3, 10*time.Millisecond, []byte("x"))
+	waitSessionTotal(t, sm, st.ID, 3, 10*time.Second)
+}
+
+// TestSessionCloseAndCloseAll: Close unsubscribes (no further emits), marks
+// the session closed, and leaks no goroutines (batch-mode timer goroutine and
+// state-throttle timer must both terminate). CloseAll closes every session.
+func TestSessionCloseAndCloseAll(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	_, sm, rec := newSessionStack(t, url, 10000, PushBatch)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "close." + uniqueSuffix(), PushMode: PushBatch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := connect(t, url)
+	burstPublish(t, nc, st.Subject, 7, 7, 20*time.Millisecond, []byte("x"))
+	waitSessionTotal(t, sm, st.ID, 7, 10*time.Second)
+
+	if err := sm.Close(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Close(st.ID); err != nil { // idempotent
+		t.Fatalf("second Close: %v", err)
+	}
+	closed := findState2(t, sm, st.ID)
+	if closed.State != SessionClosed {
+		t.Fatalf("state after Close = %q, want closed", closed.State)
+	}
+
+	emitsAtClose := rec.msgCount(st.ID)
+	burstPublish(t, nc, st.Subject, 5, 5, 10*time.Millisecond, []byte("late"))
+	time.Sleep(300 * time.Millisecond)
+	if got := rec.msgCount(st.ID); got != emitsAtClose {
+		t.Fatalf("emits after Close: %d -> %d (unsubscription failed)", emitsAtClose, got)
+	}
+	if st2, _ := findState(sm, st.ID); st2.Total != int64(emitsAtClose) {
+		t.Fatalf("Total after Close = %d, want frozen %d", st2.Total, emitsAtClose)
+	}
+
+	// Goroutine-leak check for a fresh batch session (timer goroutine + state
+	// throttle timer must both terminate). Side conns are closed first so the
+	// baseline is stable.
+	nc.Close()
+	time.Sleep(200 * time.Millisecond)
+	before := runtime.NumGoroutine()
+	st2, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "leak." + uniqueSuffix(), PushMode: PushBatch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Close(st2.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before {
+		t.Fatalf("goroutine leak around Close: before=%d after=%d", before, after)
+	}
+
+	// CloseAll closes everything (states stay listable as closed).
+	if _, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "all1." + uniqueSuffix()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "all2." + uniqueSuffix()}); err != nil {
+		t.Fatal(err)
+	}
+	sm.CloseAll()
+	sm.CloseAll() // idempotent
+	list := sm.List()
+	if len(list) != 4 { // close.* + leak.* + all1.* + all2.* (closed sessions remain listable)
+		t.Fatalf("List after CloseAll has %d sessions, want 4", len(list))
+	}
+	for _, s := range list {
+		if s.State != SessionClosed {
+			t.Fatalf("session %s state after CloseAll = %q, want closed", s.ID, s.State)
+		}
+	}
+}
+
+// --- wire contract (SessionSpec/SessionState json tags are frozen) -------------
+
+func TestSessionTypesJSONContract(t *testing.T) {
+	st := SessionState{
+		ID: "sub-1", Subject: "orders.received", State: "running", PushMode: PushRealtime,
+		RateMsgS: 12.5, Total: 42, Dropped: 7, BufferUsed: 35,
+	}
+	got, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"id":"sub-1","subject":"orders.received","state":"running","push_mode":"realtime","rate_msg_s":12.5,"total":42,"dropped":7,"buffer_used":35}`
+	if string(got) != want {
+		t.Fatalf("SessionState JSON drifted from contract:\n got  %s\n want %s", got, want)
+	}
+	st.Error = "boom"
+	got, err = json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{"id":"sub-1","subject":"orders.received","state":"running","push_mode":"realtime","rate_msg_s":12.5,"total":42,"dropped":7,"buffer_used":35,"error":"boom"}`
+	if string(got) != want {
+		t.Fatalf("SessionState Error tag wrong:\n got  %s\n want %s", got, want)
+	}
+
+	spec := SessionSpec{Subject: "s", PushMode: PushBatch, BufferSize: 100,
+		JSPosition: &JSPosition{Mode: "start_sequence", StartSeq: 9}}
+	got, err = json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSpec := `{"subject":"s","push_mode":"batch","buffer_size":100,"js_position":{"mode":"start_sequence","start_seq":9}}`
+	if string(got) != wantSpec {
+		t.Fatalf("SessionSpec JSON drifted:\n got  %s\n want %s", got, wantSpec)
+	}
+	got, err = json.Marshal(SessionSpec{Subject: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"subject":"x","push_mode":"","buffer_size":0}`; string(got) != want {
+		t.Fatalf("zero SessionSpec JSON wrong:\n got  %s\n want %s", got, want)
+	}
+
+	if EventSessionMsgs != "session:msgs" || EventSessionState != "session:state" {
+		t.Fatalf("event name contract drifted: %q / %q", EventSessionMsgs, EventSessionState)
+	}
+}
+
+// --- real local nats-server variants (M2 mandate) -------------------------------
+
+func TestSessionRealtimeReceivesLocalServer(t *testing.T) {
+	requireLocalServer(t)
+	scenarioSessionRealtime(t, localServerURL)
+}
+
+func TestSessionPauseResumeSemanticsLocalServer(t *testing.T) {
+	requireLocalServer(t)
+	scenarioSessionPauseResume(t, localServerURL)
+}
+
+// TestSessionFloodDropCountingLocalServer is the mandated real-server flood:
+// 5000 msg/s x 3s into a 1000-message buffer, plus a pause mid-flood.
+func TestSessionFloodDropCountingLocalServer(t *testing.T) {
+	requireLocalServer(t)
+	scenarioSessionFlood(t, localServerURL, 3*time.Second, true)
+}
+
+func TestSessionBatchModeLocalServer(t *testing.T) {
+	requireLocalServer(t)
+	scenarioSessionBatch(t, localServerURL)
+}
+
+func TestSessionClearLocalServer(t *testing.T) {
+	requireLocalServer(t)
+	scenarioSessionClear(t, localServerURL)
+}
+
+// --- reconnect (inline restartable server; can't restart the shared one) -------
+
+// freePort asks the OS for a currently unused TCP port (manager_test.go
+// fixture pattern, replicated here because that helper is package-private to
+// connections).
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// startServerOnPort boots a plain embedded server on an explicit port and
+// store dir. Cleanup is NOT registered so tests can shut it down and restart
+// a twin on the same port (M1 Task 8 / TestReconnectOnServerRestart pattern).
+func startServerOnPort(t *testing.T, port int, dir string) *server.Server {
+	t.Helper()
+	srv, err := server.NewServer(&server.Options{
+		Port:       port,
+		ServerName: "TEST_SESS",
+		StoreDir:   dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	if !srv.ReadyForConnections(10 * time.Second) {
+		t.Fatal("server not ready")
+	}
+	return srv
+}
+
+// TestSessionReconnectResubscribes: server restart on the SAME port/store dir.
+// nats.go keeps the same conn and auto-resubscribes; NotifyConnState(connected)
+// must therefore NOT duplicate subscriptions. Messages published during the
+// disconnect window are never replayed; new messages resume; the session stays
+// running throughout.
+func TestSessionReconnectResubscribes(t *testing.T) {
+	port := freePort(t)
+	dir := t.TempDir()
+	srv := startServerOnPort(t, port, dir)
+
+	reg := natscontext.NewRegistry(natscontext.NewFileBackendAt(t.TempDir()))
+	rec := newEmitRecorder()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	var sm *SessionManager
+	mgr := connections.NewManager(reg, log, func(name string, data any) {
+		rec.emit(name, data)
+		if ev, ok := data.(connections.StateEvent); ok && sm != nil {
+			sm.NotifyConnState(ev) // main.go-style side-band (Task 7 wiring)
+		}
+	})
+	sm = NewSessionManager(mgr, log, rec.emit, 10000, PushRealtime)
+	t.Cleanup(srv.Shutdown)   // registered first: runs after client teardown
+	t.Cleanup(mgr.Disconnect) // disconnect before the replacement server dies
+	t.Cleanup(sm.CloseAll)    // registered last: runs first (live conn)
+
+	store := connections.NewStore(reg)
+	if err := store.Save(context.Background(), connections.ContextForm{Name: "re", URL: srv.ClientURL()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Connect(context.Background(), "re"); err != nil {
+		t.Fatal(err)
+	}
+	waitManagerConnected(t, mgr, 10*time.Second)
+
+	subj := "recon." + uniqueSuffix()
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: subj})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nc := connect(t, srv.ClientURL()) // publisher (dies with the first server)
+	pre := burstPublish(t, nc, subj, 5, 5, 10*time.Millisecond, []byte("pre-"))
+	waitSessionTotal(t, sm, st.ID, int64(pre), 10*time.Second)
+
+	// Server dies: manager moves to reconnecting; the session stays running
+	// (no paused-marking per M2 user ruling).
+	srv.Shutdown()
+	deadline := time.Now().Add(10 * time.Second)
+	for !rec.sawConnState(connections.StateReconnecting) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !rec.sawConnState(connections.StateReconnecting) {
+		t.Fatal("manager never entered reconnecting")
+	}
+	if s, _ := findState(sm, st.ID); s.State != SessionRunning {
+		t.Fatalf("session state during disconnect = %q, want running", s.State)
+	}
+
+	// Server returns on the same port; a helper client publishes GAP messages
+	// immediately — inside the manager's ~1s reconnect backoff window — so
+	// they land while the session is unsubscribed. Core NATS has no storage,
+	// so they must never be replayed.
+	srv2 := startServerOnPort(t, port, dir)
+	gap := connect(t, srv2.ClientURL())
+	gapPublished := burstPublish(t, gap, subj, 6, 2, 10*time.Millisecond, []byte("gap-"))
+	time.Sleep(300 * time.Millisecond) // widen the window; manager still reconnecting
+
+	waitManagerConnected(t, mgr, 15*time.Second) // nats.go reconnect (same conn)
+	if !rec.sawConnState(connections.StateConnected) {
+		t.Fatal("no connected event after restart")
+	}
+
+	ncPost := connect(t, srv2.ClientURL()) // fresh publisher for the new server
+	post := burstPublish(t, ncPost, subj, 4, 4, 10*time.Millisecond, []byte("post-"))
+	final := waitQuiescent(t, sm, st.ID, 15*time.Second)
+	if s, _ := findState(sm, st.ID); s.State != SessionRunning {
+		t.Fatalf("session state after reconnect = %q, want running", s.State)
+	}
+	if final.Total != int64(pre+post) {
+		t.Fatalf("Total = %d, want %d (gap messages must NOT be replayed)", final.Total, pre+post)
+	}
+
+	// Payload audit (in-memory only; nothing is logged): every pre-* message
+	// exactly once, no gap-* at all, every post-* present, and nothing else
+	// (rules out both gap replay and reconnect duplicates).
+	got := rec.countPayloadPrefix(st.ID, "pre-")
+	gapN := rec.countPayloadPrefix(st.ID, "gap-")
+	postN := rec.countPayloadPrefix(st.ID, "post-")
+	if got != pre || postN != post || gapN != 0 {
+		t.Fatalf("payload audit: pre=%d (want %d) gap=%d (want 0) post=%d (want %d); gap published=%d",
+			got, pre, gapN, postN, post, gapPublished)
+	}
+}
