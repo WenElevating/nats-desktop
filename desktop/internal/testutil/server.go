@@ -1,0 +1,49 @@
+// Package testutil provides embedded nats-server test fixtures: single-node
+// servers with random ports, started and cleaned up automatically via t.Cleanup.
+// Unlike the natscli 3-node cluster fixture, these single-node fixtures do not
+// skip on Windows.
+package testutil
+
+import (
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats-server/v2/server"
+)
+
+// start boots an embedded nats-server with the given options, waits for it to
+// accept client connections, and registers srv.Shutdown with t.Cleanup.
+func start(t *testing.T, opts *server.Options) string {
+	t.Helper()
+	srv, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	if !srv.ReadyForConnections(10 * time.Second) {
+		t.Fatal("server not ready")
+	}
+	t.Cleanup(srv.Shutdown)
+	return srv.ClientURL()
+}
+
+// StartJSServer starts a single-node server with JetStream enabled, a random
+// port, and its store directory in t.TempDir(). It returns the client URL.
+func StartJSServer(t *testing.T) string {
+	return start(t, &server.Options{
+		Port:       -1,
+		ServerName: "TEST_JS",
+		StoreDir:   t.TempDir(),
+		JetStream:  true,
+	})
+}
+
+// StartAuthServer starts a single-node server on a random port that requires
+// basic username/password authentication. It returns the client URL.
+func StartAuthServer(t *testing.T, user, pass string) string {
+	return start(t, &server.Options{
+		Port:       -1,
+		ServerName: "TEST_AUTH",
+		Users:      []*server.User{{Username: user, Password: pass}},
+	})
+}

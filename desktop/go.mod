@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/nats-io/jsm.go v0.4.2-0.20260907110945-19fe165a004c
 	github.com/nats-io/nats-server/v2 v2.15.0-preview.1
+	github.com/nats-io/nats.go v1.53.1
 	github.com/wailsapp/wails/v3 v3.0.0-beta.20
 	golang.org/x/sys v0.47.0
 )
@@ -23,7 +24,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/nats-io/jwt/v2 v2.8.2 // indirect
-	github.com/nats-io/nats.go v1.53.1 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	golang.org/x/crypto v0.56.0 // indirect
