@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Events, System } from "@wailsio/runtime";
 import { applyTheme, ThemeMode } from "./app/theme";
 import { setLanguage, useTranslation } from "./app/i18n";
@@ -6,7 +6,8 @@ import { Shell, type PageId } from "./app/shell";
 import { ConnStateProvider, useConnState } from "./app/connstate";
 import { CommandPalette } from "./app/command";
 import { SettingsPage } from "./features/settings/SettingsPage";
-import { Default, GetSettings, SaveSettings } from "./lib/bindings";
+import { ConnectionsPage } from "./features/connections/ConnectionsPage";
+import { Connect, Default, GetSettings, ListContexts, SaveSettings } from "./lib/bindings";
 import type { Settings } from "./lib/bindings";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -66,13 +67,29 @@ function App() {
 }
 
 function AppBody() {
+  const { t } = useTranslation();
   const [settings, setSettings] = useState<Settings>(Default());
   const [page, setPage] = useState<PageId>("dashboard");
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // Task 10 seam: ListContexts() hydration and the Connect binding. The
-  // switcher/palette render an empty (disabled) list until then.
-  const [contexts] = useState<string[]>([]);
+  // Settings hosts two tabs: the general form and connection management.
+  const [settingsTab, setSettingsTab] = useState<"general" | "connections">("general");
+  // Known context names for the sidebar switcher and the command palette;
+  // refreshed on mount and after every connection mutation.
+  const [contexts, setContexts] = useState<string[]>([]);
   const conn = useConnState();
+
+  const refreshContexts = useCallback(async () => {
+    try {
+      const list = await ListContexts();
+      setContexts((list ?? []).map((c) => c.name));
+    } catch (err) {
+      console.error("list contexts failed:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshContexts();
+  }, [refreshContexts]);
 
   // Load persisted settings once, then apply language (theme flows through
   // the controller below).
@@ -113,9 +130,11 @@ function AppBody() {
     setLanguage(s.appearance.language);
   };
 
-  // Task 10 wires the Connect binding for context switching.
+  // Switch the live connection to the named context; progress and failures
+  // surface through conn:state events (banner / footer), so only the error
+  // itself needs logging here.
   const switchContext = (name: string) => {
-    void name;
+    Connect(name).catch((err) => console.error("connect failed:", err));
   };
 
   return (
@@ -128,7 +147,34 @@ function AppBody() {
         onSwitchContext={switchContext}
       >
         {page === "settings" ? (
-          <SettingsPage settings={settings} onSave={handleSave} />
+          <div className="flex min-h-0 flex-1 flex-col" data-testid="settings-tabs">
+            <div role="tablist" aria-label={t("settings.title")} className="flex gap-1 border-b border-border px-4 pt-2">
+              {(["general", "connections"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === tab}
+                  data-testid={`settings-tab-${tab}`}
+                  onClick={() => setSettingsTab(tab)}
+                  className={`rounded-t-md px-3 py-1.5 text-sm outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 ${
+                    settingsTab === tab
+                      ? "border-b-2 border-[var(--accent)] font-medium text-foreground"
+                      : "border-b-2 border-transparent text-[var(--fg-muted)] hover:text-foreground"
+                  }`}
+                >
+                  {t(tab === "general" ? "settings.tabGeneral" : "settings.tabConnections")}
+                </button>
+              ))}
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              {settingsTab === "general" ? (
+                <SettingsPage settings={settings} onSave={handleSave} />
+              ) : (
+                <ConnectionsPage activeContext={conn.context} onChanged={refreshContexts} />
+              )}
+            </div>
+          </div>
         ) : (
           <PagePlaceholder page={page} />
         )}

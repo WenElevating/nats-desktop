@@ -2,10 +2,12 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { Events } from "@wailsio/runtime";
+import { ConnSnapshot } from "../lib/bindings";
 
 /**
  * Connection state as consumed by the UI. Mirrors the Go
@@ -51,15 +53,26 @@ const ConnStateContext = createContext<ConnState>(DISCONNECTED);
  * Subscribes to Wails "conn:state" events and exposes the latest state via
  * useConnState(). Mount once, wrapping the Shell.
  *
- * Task 10 seam: once the connections service is registered, hydrate the
- * initial value from the ConnSnapshot() binding here; until then the
- * disconnected default is authoritative and events drive everything.
+ * On mount the state is also hydrated from the ConnSnapshot() binding so
+ * transitions that fired before the UI subscribed (e.g. the §6.1 startup
+ * restore) are reflected; a live event always wins over a late snapshot.
  */
 export function ConnStateProvider({ children }: { children: ReactNode }) {
   const [conn, setConn] = useState<ConnState>(DISCONNECTED);
+  const gotEvent = useRef(false);
 
   useEffect(() => {
-    const off = Events.On("conn:state", (e) => setConn(parseEvent(e.data)));
+    const off = Events.On("conn:state", (e) => {
+      gotEvent.current = true;
+      setConn(parseEvent(e.data));
+    });
+    ConnSnapshot()
+      .then((snap) => {
+        if (!gotEvent.current && snap) setConn(parseEvent(snap));
+      })
+      .catch(() => {
+        /* outside Wails (plain browser/tests) — the default stands */
+      });
     return () => {
       off();
     };

@@ -149,6 +149,42 @@ func formOptions(f ContextForm) []natscontext.Option {
 	return opts
 }
 
+// Form loads the named context as a full ContextForm so an edit dialog can
+// prefill every field (the edit path skips empty fields, so "unchanged" is
+// the norm — the form must show what is stored). The authType is not part
+// of ContextForm; callers derive it from the List summary.
+func (s *Store) Form(ctx context.Context, name string) (ContextForm, error) {
+	if err := natscontext.ValidateName(name); err != nil {
+		return ContextForm{}, err
+	}
+
+	c, err := s.reg.Load(ctx, name)
+	if err != nil {
+		return ContextForm{}, err
+	}
+
+	return ContextForm{
+		Name:          c.Name,
+		Description:   c.Description(),
+		URL:           c.ServerURL(),
+		User:          c.User(),
+		Password:      c.Password(),
+		Token:         c.Token(),
+		Creds:         c.Creds(),
+		Nkey:          c.NKey(),
+		Cert:          c.Certificate(),
+		Key:           c.Key(),
+		CA:            c.CA(),
+		JSDomain:      c.JSDomain(),
+		JSAPIPrefix:   c.JSAPIPrefix(),
+		JSEventPrefix: c.JSEventPrefix(),
+		InboxPrefix:   c.InboxPrefix(),
+		SocksProxy:    c.SocksProxy(),
+		ColorScheme:   c.ColorScheme(),
+		TLSFirst:      c.TLSHandshakeFirst(),
+	}, nil
+}
+
 // Delete removes the named context file. If it is the currently
 // selected context the selection is cleared first (active-context
 // bookkeeping beyond that is the Manager layer's job).
