@@ -1,7 +1,7 @@
 # NATS 桌面客户端 M2 验收记录
 
 - 日期：2026-09-12（凌晨实跑）
-- 分支 / HEAD：`desktop/m2` @ `3759a72`（Task 1–12 全部合并）+ 本记录与 flood 工具提交（Task 13）
+- 分支 / HEAD：`desktop/m2` @ `adb41c8`（遗留清单经终审补全于后续提交）（Task 1–12 全部合并）+ 本记录与 flood 工具提交（Task 13）
 - 范围：M2 = 规格 §6.3（发布与请求-应答）+ §6.4（订阅会话）+ §7.1.3/§8.5.1 事件契约 + §12 实时模式性能 + M1 遗留接线（计划 `2026-09-11-nats-desktop-m2.md`，Task 1–13）
 - 结论先行：**自动化回归全绿（125 Go 测试 + 95 前端测试）；性能门槛全部大幅达标（管线 14.1M msg/s、真机会话持续 628k msg/s、前端 1 万条 136ms）；flood 注入器实测 1k/5k/50k msg/s 节流精度 99.6–99.9%（真服务器 4333）；体积/冷启动/内存与 M1 基线一致且达标**。所有需要 GUI 在场的观察项（滚动流畅度、上屏延迟、暂停立即生效的视觉面等）如实列为 PENDING-MANUAL 并附精确点击路径；控制器将按 M1 惯例补一轮真服务器 GUI 冒烟（§7 占位）。
 
@@ -113,32 +113,37 @@ M2 Task 1 的应用级 ready 日志已落地（M1 遗留 §5-2 解决），本�
 | §6.3/§6.4 异常表 | 无响应者/超大/非法主题/断开禁用/JS 拒绝/断线重订阅 | **AUTOMATED-PASS** | Go：`TestRequestNoRespondersLocalServer`、`TestPublishTooLargeLocalServer`、`TestSessionInvalidSubject`、`TestServiceDisconnectedGating`、`TestSessionReconnectResubscribes`（按位重放，Task 5）；JS 错误映射：`pubreq_test.go` + 前端文案（Task 7/8）。 |
 | §13 日志不记 payload/凭证 | — | **AUTOMATED-PASS**（M1 AC-030 同源机制 + M2 会话路径不落 payload） | 会话事件只经 Wails 事件通道进前端，不经文件日志；日志洁净测试 `logging_test.go`（M1 遗产）维持全绿。 |
 
-## 6. M2 遗留清单（按任务 Minor 整理，移交 M3/M6）
+## 6. M2 遗留清单（按任务 Minor 整理，移交 M3/M6；终审后补全版）
 
 ### 移交 M3（功能/前端细化，多为后续任务须知）
 
 1. **Task 4**：断连时 `CreateSession` fail-closed 无法自动复活——前端须在 disconnected 时 gate 会话创建（已实现"未连接禁用"，复活路径仍缺）；批量+暂停边缘：批量缓冲内的暂停前消息 ≤100ms 后仍会推出（暂停语义文档已注明双文本）。
-2. **Task 5**：`mode new` 走 JS 路径 + 空 mode 拒绝——前端表单需知晓；失败 resubscribe 双重 fireNow（收敛项）。
-3. **Task 6**：集群 hop 形态（mapping/service_import/stream_export）与 egress.Link 递归多节点未测——**M3 集群功能时补**。
+2. **Task 5**：`mode new` 走 JS 路径 + 空 mode 拒绝——前端表单需知晓；失败 resubscribe 双重 fireNow（收敛项）；`cctxNC` 死字段（JS 路径无 same-conn 跳过对应物，读者会寻找不存在的比较）。
+3. **Task 6**：集群 hop 形态（mapping/service_import/stream_export）与 egress.Link 递归多节点未测——**M3 集群功能时补**；trace 超时部分结果路径（ErrTimeout 时返回部分树）未测；ingress-less 防御根为死路径（GetMsgTrace 已拒）。
 4. **Task 7**：生成代码 `PushMode` 枚举含 `$zero=""`（前端勿发送）；`ListSessions` 生成 nullability 需 null guard。
-5. **Task 9**：start_seq/时间非法输入目前靠服务端拒（可改前端禁用提升体验）；closed 会话消息保留策略未显式断言；未知 state 回落 running/绿。
-6. **Task 3**：超时映射依赖 error 串匹配（宜改 errors.Is）；失败的 JS 发布 `res.JetStream=true` 残留（装饰性）。
-7. **Task 11**：前端 perf 载荷 6B vs Go 侧 1KB（口径统一后更有说服力）；bench 未挂 build needs、无 Go 模块缓存（CI 延迟优化）。
-8. **主 chunk 522.47kB**：MessagesPage 已拆出，其余页面继续按需 code-split。
-9. **Task 1**：设置中途开启 update_check 需 remount 才生效 mount 兜底；语言切换会重跑一次 mount 兜底（多一次静默检查）。
+5. **Task 8**：`Nats-Msg-Id` 头合并大小写敏感（`nats-msg-id` 手填行与 msgId 输入会产生两个 wire key）；feature 代码混合导入风格（`@/` vs 相对路径）；测试头残留 "(9.0 MB)" 陈旧注释；异步 seed effect 产生 act() 警告（不影响行为）。
+6. **Task 9**：start_seq/时间非法输入目前靠服务端拒（可改前端禁用提升体验）；挂载前水合会话固定用 DEFAULT_BUFFER=10000（Go 持真实 cap，当前表单恒发 buffer_size=0 故无实害）；closed 会话消息保留策略未显式断言；未知 state 字符串回落 running/绿。
+7. **Task 10**：开关默认态断言写法冗余（aria-checked ?? data-state 恒真——实际契约已另行硬断言，属测试卫生）；header 行/HopNode 用 index key（当前追加删除模式正确，重排场景需换）。
+8. **Task 12**：同毫秒外部写入可能漏检（mtime 毫秒精度，已接受）；负 knownModTimeMs 走 fail-closed 检查（对 ">0" 契约的措辞偏差，安全方向）；编辑预填异步完成前保存会静默跳过检查（小窗口，可改阻塞保存直至预填完成）。
+9. **Task 3**：超时映射依赖 error 串匹配（宜改 errors.Is）；失败的 JS 发布 `res.JetStream=true` 残留（装饰性）。
+10. **Task 11**：前端 perf 载荷 6B vs Go 侧 1KB（口径统一后更有说服力）；bench 未挂 build needs、无 Go 模块缓存（CI 延迟优化）；应力测试 quiescent 快照与计数器读取间有理论 straggler 窗口。
+11. **Task 2**：emit 并发顺序契约未写进 pusher doc（emit 可能并发调用，跨批顺序不保证——MsgOut.Seq 为重排序键，M3 消费方须知晓）；Stop 后尾批可能 emit（文档"Once Stop returns"措辞过强，下一句的正确指引为准）；NumGoroutine 泄漏检测模式随套件增长偏脆。
+12. **Task 1**：设置中途开启 update_check 需 remount 才生效 mount 兜底；语言切换会重跑一次 mount 兜底（多一次静默检查）。
+13. **主 chunk 522.47kB**：MessagesPage 已拆出，其余页面继续按需 code-split。
 
 ### 移交 M6（性能口径/发布/稳定性）
 
-10. **内存口径统一**：以 private working set 求和口径按 §12 双档（高配/低配）复测，含"典型负载 30 分钟"条件（本轮与 M1 同为空载 60s 基线）。
-11. **24 小时稳定性**（§12.1）：连续运行、内存增长 ≤10%、线程/连接/队列不泄漏——M2 无长时实测。
-12. **安装器打包与体积**：NSIS/便携双包，30MB 口径在安装器上复核。
-13. **低配档（2 核/4GB/HDD/禁 GPU）全项复测**：CI `--cpus=2` bench job 已部分承接（Task 11），真机双档走查留 M6。
+14. **内存口径统一**：以 private working set 求和口径按 §12 双档（高配/低配）复测，含"典型负载 30 分钟"条件（本轮与 M1 同为空载 60s 基线）；内存表 59.1+179.4=238.5 与合计 238.4 有舍入漂移（底层值舍入产物）。
+15. **24 小时稳定性**（§12.1）：连续运行、内存增长 ≤10%、线程/连接/队列不泄漏——M2 无长时实测。
+16. **安装器打包与体积**：NSIS/便携双包，30MB 口径在安装器上复核。
+17. **低配档（2 核/4GB/HDD/禁 GPU）全项复测**：CI `--cpus=2` bench job 已部分承接（Task 11），真机双档走查留 M6。
+18. **5k×60s 丢帧 <5% 判读**：Go 侧 4,995 msg/s 无漂移已测；UI 丢帧需录屏判读（§7 占位）。
 
 ### 环境注记（先于 M2 存在/本轮确认）
 
-14. `-race` 本机不可用（C 盘空间 + msys2 gcc 损坏，Task 5 台账）→ CI 承接；**CI Windows runner `-race` 首跑验证仍未完成**（M1 Task 13 遗留）。
-15. `TestAuthFailureGoesFailedNoRetryLoop` 在 Windows 有预存在 flake（wsarecv reset 竞态，Task 1 台账，待清理任务）——本轮实跑未触发（connections 31 例全绿）。
-16. 主 chunk 超 500kB 警告阈值但构建未报警（rolldown-vite 行为差异）；以 §6-8 的 code-split 路线消化。
+19. `-race` 本机不可用（C 盘空间 + msys2 gcc 损坏，Task 5 台账）→ CI 承接；**CI Windows runner `-race` 首跑验证仍未完成**（M1 Task 13 遗留）。
+20. `TestAuthFailureGoesFailedNoRetryLoop` 在 Windows 有预存在 flake（wsarecv reset 竞态，Task 1 台账，待清理任务）——本轮实跑未触发（connections 31 例全绿）。
+21. 主 chunk 超 500kB 警告阈值但构建未报警（rolldown-vite 行为差异）；以 §6-13 的 code-split 路线消化。
 
 ## 7. 控制器冒烟待补（占位，M1 惯例）
 
