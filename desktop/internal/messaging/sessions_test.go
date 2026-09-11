@@ -799,37 +799,54 @@ func TestSessionInvalidSubject(t *testing.T) {
 	}
 }
 
-// TestSessionJSPositionValidation pins the JSPosition closed set. Modes that
-// require JetStream replay are a Task 5 seam and are rejected (not silently
-// mis-handled) until then; nil and "new" take the core path.
+// TestSessionJSPositionValidation pins the JSPosition closed set. Invalid
+// modes are rejected locally (no session, no events); every valid mode routes
+// to the Task 5 JetStream path, so a subject no stream covers fails there
+// with the mapped "no stream" error (session closed, verbatim text).
 func TestSessionJSPositionValidation(t *testing.T) {
 	url := testutil.StartJSServer(t)
-	_, sm, _ := newSessionStack(t, url, 10000, PushRealtime)
+	_, sm, rec := newSessionStack(t, url, 10000, PushRealtime)
 	sfx := uniqueSuffix()
 
-	// Closed-set violations.
-	if _, err := sm.CreateSession(context.Background(), SessionSpec{
-		Subject: "js.bad." + sfx, JSPosition: &JSPosition{Mode: "bogus"}}); err == nil {
-		t.Fatal(`js_position mode "bogus" must be rejected`)
+	// Closed-set violations (including an explicit empty mode: a provided
+	// js_position must carry an explicit mode).
+	for _, mode := range []string{"bogus", ""} {
+		if _, err := sm.CreateSession(context.Background(), SessionSpec{
+			Subject: "js.bad." + sfx, JSPosition: &JSPosition{Mode: mode}}); err == nil {
+			t.Fatalf("js_position mode %q must be rejected", mode)
+		}
+	}
+	if n := rec.sessionEventCount(); n != 0 {
+		t.Fatalf("closed-set rejects emitted %d session events, want nothing", n)
 	}
 
-	// JetStream-replay modes are not implemented in Task 4 (Task 5 seam).
-	for _, mode := range []string{"all", "start_sequence", "start_time"} {
-		if _, err := sm.CreateSession(context.Background(), SessionSpec{
-			Subject: "js." + mode + "." + sfx, JSPosition: &JSPosition{Mode: mode, StartSeq: 5}}); err == nil {
-			t.Fatalf("js_position mode %q must be rejected until Task 5 lands", mode)
+	// Valid modes route to the JS path; without a covering stream each fails
+	// with the "no stream" error and the session is registered closed.
+	for _, mode := range []string{"all", "new", "start_sequence", "start_time"} {
+		st, err := sm.CreateSession(context.Background(), SessionSpec{
+			Subject: "js.nostream." + sfx, JSPosition: &JSPosition{Mode: mode, StartSeq: 5}})
+		if err == nil {
+			t.Fatalf("js_position mode %q without a covering stream must fail", mode)
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "no stream") {
+			t.Fatalf("mode %q: Error = %q, want it to contain %q", mode, err.Error(), "no stream")
+		}
+		if st.State != SessionClosed || !strings.Contains(st.Error, "no stream") {
+			t.Fatalf("mode %q: state %+v, want closed with the verbatim no-stream error", mode, st)
 		}
 	}
 
-	// nil and "new" take the core path and start receiving.
+	// mode "new" on a stream-covered subject: a running JS consumer session.
+	nc := connect(t, url)
+	createJSStream(t, nc, "M2T5-VAL-"+sfx, "js.new."+sfx+".>")
 	st, err := sm.CreateSession(context.Background(), SessionSpec{
-		Subject: "js.new." + sfx, JSPosition: &JSPosition{Mode: "new"}})
+		Subject: "js.new." + sfx + ".one", JSPosition: &JSPosition{Mode: "new"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	nc := connect(t, url)
-	burstPublish(t, nc, st.Subject, 3, 3, 10*time.Millisecond, []byte("x"))
-	waitSessionTotal(t, sm, st.ID, 3, 10*time.Second)
+	if st.State != SessionRunning {
+		t.Fatalf("mode new initial state = %q, want running", st.State)
+	}
 }
 
 // TestSessionCloseAndCloseAll: Close unsubscribes (no further emits), marks

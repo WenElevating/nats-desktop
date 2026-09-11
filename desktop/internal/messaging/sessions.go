@@ -12,10 +12,14 @@
 //     receiving and new messages are counted fresh.
 //   - Reconnect: NotifyConnState is the main.go side-band for conn:state
 //     events (Task 7 wiring). On connected, every non-closed session is
-//     resubscribed — skipped when nats.go already re-armed the same
-//     connection (its core subscriptions survive a reconnect of the same
-//     *nats.Conn). Messages seen during a disconnect are never replayed
-//     (core NATS is at-most-once, fire-and-forget).
+//     resubscribed — core sessions are skipped when nats.go already re-armed
+//     the same connection (its core subscriptions survive a reconnect of the
+//     same *nats.Conn); JetStream positioned sessions (jsposition.go) are
+//     deterministically re-created from their JSPosition. Messages seen
+//     during a disconnect are never replayed for core sessions (core NATS is
+//     at-most-once, fire-and-forget); a JS session's position IS the user's
+//     replay intent, so re-applying it re-replays (all/start_*) or naturally
+//     continues (new).
 //
 // Per-message flow (handler runs on nats.go client goroutines, one dispatcher
 // per subscription, so emissions of a session are ordered by Seq): assemble
@@ -41,6 +45,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/WenElevating/nats-desktop/desktop/internal/connections"
 )
@@ -133,24 +138,23 @@ func NewSessionManager(mgr *connections.Manager, log *slog.Logger, emit func(nam
 
 // CreateSession subscribes to spec.Subject and starts the session. The
 // subject is validated BEFORE any network call (ErrInvalidSubject for empty or
-// whitespace-containing subjects); JetStream replay positioning other than
-// new/none is rejected until the Task 5 JS-replay path lands. A subscription
-// the server refuses leaves the session registered in state closed with the
+// whitespace-containing subjects). A non-nil JSPosition routes the session to
+// the JetStream positioned-replay path (jsposition.go) for the whole closed
+// set all|new|start_sequence|start_time — an explicitly provided js_position
+// must carry an explicit valid mode — while nil keeps the core path (Task 4).
+// A subscription the server refuses (including "no stream" for a subject no
+// stream covers) leaves the session registered in state closed with the
 // verbatim error text (spec §6.4) and returns that error as well.
-func (m *SessionManager) CreateSession(_ context.Context, spec SessionSpec) (SessionState, error) {
+func (m *SessionManager) CreateSession(ctx context.Context, spec SessionSpec) (SessionState, error) {
 	if err := validateSubject(spec.Subject); err != nil {
 		return SessionState{}, err
 	}
 	if spec.JSPosition != nil {
-		mode := spec.JSPosition.Mode
-		switch mode {
-		case "", jsModeNew:
-			// Core path: a plain subscription only sees new messages, which is
-			// exactly mode "new" (and the nil-omitted default).
-		case jsModeAll, jsModeStartSequence, jsModeStart:
-			return SessionState{}, fmt.Errorf("messaging: js_position mode %q requires JetStream replay (Task 5), not supported by core sessions", mode)
+		switch spec.JSPosition.Mode {
+		case jsModeAll, jsModeNew, jsModeStartSequence, jsModeStart:
+			// JetStream positioned path (jsposition.go).
 		default:
-			return SessionState{}, fmt.Errorf("messaging: invalid js_position mode %q (closed set: all|new|start_sequence|start_time)", mode)
+			return SessionState{}, fmt.Errorf("messaging: invalid js_position mode %q (closed set: all|new|start_sequence|start_time)", spec.JSPosition.Mode)
 		}
 	}
 
@@ -169,12 +173,18 @@ func (m *SessionManager) CreateSession(_ context.Context, spec SessionSpec) (Ses
 		return SessionState{}, ErrManagerClosed
 	}
 	id := fmt.Sprintf("sub-%d", m.counter.Add(1))
-	s := newSession(id, spec.Subject, push, buf, m.log, m.emit)
+	s := newSession(id, spec.Subject, spec.JSPosition, push, buf, m.log, m.emit)
 	m.sessions[id] = s
 	m.mu.Unlock()
 
-	if err := s.subscribe(m.conn()); err != nil {
-		return s.snapshot(), err // registered as closed with the verbatim error
+	var subErr error
+	if spec.JSPosition != nil {
+		subErr = s.subscribeJS(m.conn(), ctx) // JetStream positioned path
+	} else {
+		subErr = s.subscribe(m.conn()) // core path (Task 4)
+	}
+	if subErr != nil {
+		return s.snapshot(), subErr // registered as closed with the verbatim error
 	}
 	s.throttle.notify() // initial running state event (leading edge)
 	return s.snapshot(), nil
@@ -389,8 +399,15 @@ type session struct {
 	frozen *SessionState      // display snapshot captured at Pause
 	ring   *ring              // swapped on Clear
 	pusher *pusher            // created once; Clear does not touch it
-	sub    *nats.Subscription // nil when not subscribed
+	sub    *nats.Subscription // nil when not subscribed (core path)
 	subNC  *nats.Conn         // connection the subscription belongs to
+
+	// JetStream positioned-session state (jsposition.go). js != nil routes
+	// subscribe/resubscribe/close to the JS consumer path; cctx is the live
+	// ConsumeContext and cctxNC the connection it was created on.
+	js     *JSPosition
+	cctx   jetstream.ConsumeContext
+	cctxNC *nats.Conn
 
 	seq     atomic.Int64 // per-session message seq, monotonic from 1
 	emitted atomic.Int64 // messages handed to the pusher (excludes paused receipts)
@@ -401,10 +418,11 @@ type session struct {
 	log      *slog.Logger
 }
 
-func newSession(id, subject string, mode PushMode, buf int, log *slog.Logger, emit func(name string, data any)) *session {
+func newSession(id, subject string, js *JSPosition, mode PushMode, buf int, log *slog.Logger, emit func(name string, data any)) *session {
 	s := &session{
 		id:      id,
 		subject: subject,
+		js:      js,
 		mode:    mode,
 		cap:     buf,
 		state:   SessionRunning,
@@ -420,10 +438,17 @@ func newSession(id, subject string, mode PushMode, buf int, log *slog.Logger, em
 }
 
 // handle is the NATS subscription callback; nats.go runs it on one dispatcher
-// goroutine per subscription, so emissions keep Seq order.
+// goroutine per subscription, so emissions keep Seq order. The JS path
+// (handleJS in jsposition.go) shares the same deliver machinery.
 func (s *session) handle(m *nats.Msg) {
-	seq := s.seq.Add(1)
-	out := buildMsgOut(s.id, seq, s.subject, m)
+	out := buildMsgOut(s.id, s.seq.Add(1), s.subject, m.Data, m.Header)
+	s.deliver(out)
+}
+
+// deliver runs the common per-receipt path: rate accounting, then under the
+// session mutex total++ and ring.Add (the ring scrolls whether paused or not),
+// then outside the mutex, only when not paused: emitted++ and pusher.Add.
+func (s *session) deliver(out MsgOut) {
 	s.rate.Inc()
 
 	s.mu.Lock()
@@ -444,23 +469,24 @@ func (s *session) handle(m *nats.Msg) {
 
 // buildMsgOut assembles the wire message. Headers are deep-copied (nats.Header
 // reuses storage), the payload is base64-encoded, and the timestamp is UTC
-// RFC3339Nano. Payload content must never be logged (spec §13.3).
-func buildMsgOut(id string, seq int64, subject string, m *nats.Msg) MsgOut {
+// RFC3339Nano. Payload content must never be logged (spec §13.3). StreamSeq is
+// left 0 here; only the JS path (handleJS) fills it from the metadata.
+func buildMsgOut(id string, seq int64, subject string, data []byte, hdrs nats.Header) MsgOut {
 	out := MsgOut{
 		SessionID:   id,
 		Seq:         seq,
 		Subject:     subject,
-		PayloadB64:  base64.StdEncoding.EncodeToString(m.Data),
-		PayloadSize: len(m.Data),
+		PayloadB64:  base64.StdEncoding.EncodeToString(data),
+		PayloadSize: len(data),
 		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
-		IsUTF8:      isUTF8(m.Data),
+		IsUTF8:      isUTF8(data),
 	}
-	if len(m.Header) > 0 {
-		hdrs := make(map[string][]string, len(m.Header))
-		for k, vs := range m.Header {
-			hdrs[k] = append([]string(nil), vs...)
+	if len(hdrs) > 0 {
+		hdrsCopy := make(map[string][]string, len(hdrs))
+		for k, vs := range hdrs {
+			hdrsCopy[k] = append([]string(nil), vs...)
 		}
-		out.Headers = hdrs
+		out.Headers = hdrsCopy
 	}
 	return out
 }
@@ -497,10 +523,17 @@ func (s *session) subscribe(nc *nats.Conn) error {
 	return nil
 }
 
-// resubscribe re-arms the session on nc unless its subscription already
-// belongs to that connection (nats.go auto-resubscribes a same-conn
-// reconnect; subscribing again would duplicate deliveries).
+// resubscribe re-arms the session on nc. Core sessions are skipped when their
+// subscription already belongs to that connection (nats.go auto-resubscribes
+// a same-conn reconnect; subscribing again would duplicate deliveries).
+// JetStream positioned sessions are NOT skipped: see resubscribeJS in
+// jsposition.go — the consumer is deterministically re-created from the same
+// JSPosition on every connected event.
 func (s *session) resubscribe(nc *nats.Conn) {
+	if s.js != nil {
+		s.resubscribeJS(nc)
+		return
+	}
 	s.mu.Lock()
 	if s.state == SessionClosed || s.sub != nil && s.subNC == nc {
 		s.mu.Unlock()
@@ -527,6 +560,7 @@ func (s *session) fail(errText string) {
 	s.state = SessionClosed
 	s.subErr = errText
 	s.sub, s.subNC = nil, nil
+	s.cctx, s.cctxNC = nil, nil
 	s.mu.Unlock()
 	s.log.Error("session subscription failed", "id", s.id, "subject", s.subject, "err", errText)
 	s.throttle.fireNow()
@@ -586,19 +620,24 @@ func (s *session) clear() error {
 	return nil
 }
 
-// close unsubscribes, flushes any pending batch tail, and stops the pusher
-// and the throttle timer. Idempotent.
+// close unsubscribes (core) or stops the ConsumeContext (JS), flushes any
+// pending batch tail, and stops the pusher and the throttle timer. Idempotent.
 func (s *session) close() {
 	s.mu.Lock()
 	alreadyClosed := s.state == SessionClosed
 	sub := s.sub
+	cctx := s.cctx
 	s.sub, s.subNC = nil, nil
+	s.cctx, s.cctxNC = nil, nil
 	s.state = SessionClosed
 	s.mu.Unlock()
 	if alreadyClosed {
 		return
 	}
 
+	if cctx != nil {
+		cctx.Stop() // terminate the JS consume loop (buffered messages discarded)
+	}
 	if sub != nil {
 		_ = sub.Unsubscribe() // best-effort: a dead conn reports an error we ignore
 	}
