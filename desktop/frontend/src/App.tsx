@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Events, System } from "@wailsio/runtime";
+import { PlugZap, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { applyTheme, ThemeMode } from "./app/theme";
 import { setLanguage, useTranslation } from "./app/i18n";
@@ -10,6 +11,7 @@ import { SettingsPage } from "./features/settings/SettingsPage";
 import { ConnectionsPage } from "./features/connections/ConnectionsPage";
 import { Connect, Default, GetSettings, ListContexts, SaveSettings } from "./lib/bindings";
 import type { Settings } from "./lib/bindings";
+import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 
 const isThemeMode = (v: string): v is ThemeMode =>
@@ -59,6 +61,34 @@ function PagePlaceholder({ page }: { page: PageId }) {
   );
 }
 
+/**
+ * First-run guidance view (AC-001): with no stored context the shell's main
+ * area shows this card instead of the plain empty state. The CTA jumps to
+ * Settings > Connections and opens the create dialog (createSignal seam).
+ */
+function FirstRunGuide({ onCreate }: { onCreate: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid="first-run-guide"
+      className="flex flex-1 flex-col items-center justify-center p-8"
+    >
+      <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-panel p-8 text-center">
+        <div className="flex size-10 items-center justify-center rounded-full bg-[var(--accent-soft)]">
+          <PlugZap size={20} strokeWidth={1.75} className="text-[var(--accent-strong)]" aria-hidden="true" />
+        </div>
+        <h2 className="text-lg font-semibold">NATS Desktop</h2>
+        <p className="text-sm text-[var(--fg-muted)]">{t("guide.title")}</p>
+        <p className="text-xs text-[var(--fg-faint)]">{t("guide.body")}</p>
+        <Button size="sm" className="mt-2" data-testid="guide-create" onClick={onCreate}>
+          <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
+          {t("connections.new")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   return (
     <ConnStateProvider>
@@ -75,8 +105,13 @@ function AppBody() {
   // Settings hosts two tabs: the general form and connection management.
   const [settingsTab, setSettingsTab] = useState<"general" | "connections">("general");
   // Known context names for the sidebar switcher and the command palette;
-  // refreshed on mount and after every connection mutation.
-  const [contexts, setContexts] = useState<string[]>([]);
+  // refreshed on mount and after every connection mutation. null = the first
+  // ListContexts has not answered yet (guards the first-run guide against a
+  // flash on every startup).
+  const [contexts, setContexts] = useState<string[] | null>(null);
+  // Host-driven create-dialog request (first-run guide CTA): each pulse opens
+  // the create dialog on the connections tab exactly once.
+  const [createSignal, setCreateSignal] = useState(0);
   const conn = useConnState();
 
   const refreshContexts = useCallback(async () => {
@@ -85,6 +120,7 @@ function AppBody() {
       setContexts((list ?? []).map((c) => c.name));
     } catch (err) {
       console.error("list contexts failed:", err);
+      setContexts([]);
     }
   }, []);
 
@@ -141,14 +177,28 @@ function AppBody() {
     });
   };
 
+  // First run = the initial listing answered with zero contexts (AC-001):
+  // the guide card replaces the per-page empty state.
+  const firstRun = contexts !== null && contexts.length === 0;
+
+  // Guide CTA: land on Settings > Connections and pulse the create signal so
+  // the page opens the create dialog (whether it mounts fresh or is already
+  // mounted).
+  const openCreateContext = () => {
+    setPage("settings");
+    setSettingsTab("connections");
+    setCreateSignal((n) => n + 1);
+  };
+
   return (
     <>
       <Shell
         page={page}
         onNavigate={setPage}
         conn={conn}
-        contexts={contexts}
+        contexts={contexts ?? []}
         onSwitchContext={switchContext}
+        guide={firstRun ? <FirstRunGuide onCreate={openCreateContext} /> : undefined}
       >
         {page === "settings" ? (
           <div className="flex min-h-0 flex-1 flex-col" data-testid="settings-tabs">
@@ -175,7 +225,12 @@ function AppBody() {
               {settingsTab === "general" ? (
                 <SettingsPage settings={settings} onSave={handleSave} />
               ) : (
-                <ConnectionsPage activeContext={conn.context} onChanged={refreshContexts} />
+                <ConnectionsPage
+                  activeContext={conn.context}
+                  onChanged={refreshContexts}
+                  createSignal={createSignal}
+                  onCreateSignalConsumed={() => setCreateSignal(0)}
+                />
               )}
             </div>
           </div>
@@ -190,7 +245,7 @@ function AppBody() {
           setPage(p);
           setPaletteOpen(false);
         }}
-        contexts={contexts}
+        contexts={contexts ?? []}
         onSwitchContext={switchContext}
       />
       <Toaster theme={isDark ? "dark" : "light"} position="bottom-right" />

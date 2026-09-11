@@ -155,6 +155,11 @@ export interface ConnectionsPageProps {
   /** Invoked after save/delete/copy so the host can refresh the switcher
    * and command-palette context lists. */
   onChanged?: () => void;
+  /** Host-driven create request (first-run guide CTA): each increment opens
+   * the create dialog once — the pulse is consumed via
+   * onCreateSignalConsumed so later remounts (tab switches) do not reopen it. */
+  createSignal?: number;
+  onCreateSignalConsumed?: () => void;
 }
 
 /**
@@ -163,7 +168,12 @@ export interface ConnectionsPageProps {
  * with inline zod validation and a test-connection probe, a copy dialog,
  * and an env-override warning banner (spec §6.2 / §6.4).
  */
-export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPageProps) {
+export function ConnectionsPage({
+  activeContext = "",
+  onChanged,
+  createSignal = 0,
+  onCreateSignalConsumed,
+}: ConnectionsPageProps) {
   const { t } = useTranslation();
   const [list, setList] = useState<ContextSummary[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -245,6 +255,17 @@ export function ConnectionsPage({ activeContext = "", onChanged }: ConnectionsPa
       })
       .catch((err) => console.error("load context form failed:", err));
   };
+
+  // Host-driven create request (first-run guide CTA): fire openNew on every
+  // signal pulse, then hand the pulse back so it is consumed exactly once.
+  // openNew/onCreateSignalConsumed are intentionally not deps — the effect
+  // must track only the pulse.
+  useEffect(() => {
+    if (!createSignal) return;
+    openNew();
+    onCreateSignalConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createSignal]);
 
   const validate = (): boolean => {
     const parsed = contextFormSchema.safeParse(draft);

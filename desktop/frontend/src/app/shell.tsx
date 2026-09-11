@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Database,
   LayoutDashboard,
+  Loader2,
   Mail,
   Package,
   Settings,
@@ -13,7 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "./i18n";
-import { DISCONNECTED, type ConnState } from "./connstate";
+import { useConnState, type ConnState } from "./connstate";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -67,12 +68,19 @@ export interface ShellProps {
   page: PageId;
   onNavigate: (p: PageId) => void;
   children: ReactNode;
-  /** Current connection state; defaults to the disconnected snapshot. */
+  /**
+   * Explicit connection state override. When omitted the shell consumes the
+   * ConnStateProvider context via useConnState (spec §18.3 banner/footer);
+   * hosts without a provider get the disconnected default.
+   */
   conn?: ConnState;
   /** Known context names for the switcher. Task 10 wires ListContexts. */
   contexts?: string[];
   /** Invoked when the user picks a context to switch to (Task 10: Connect). */
   onSwitchContext?: (name: string) => void;
+  /** Rendered in place of the disconnected empty state on first run (no
+   * contexts yet): the guide card with the "create context" CTA (AC-001). */
+  guide?: ReactNode;
 }
 
 /**
@@ -85,11 +93,17 @@ export function Shell({
   page,
   onNavigate,
   children,
-  conn = DISCONNECTED,
+  conn: connOverride,
   contexts = [],
   onSwitchContext,
+  guide,
 }: ShellProps) {
   const { t } = useTranslation();
+  // §18.3: the banner and status footer consume the live connection state
+  // (conn:state events via useConnState; the context default is DISCONNECTED
+  // when no provider is mounted). An explicit prop wins so hosts and tests
+  // can pin a state.
+  const conn = connOverride ?? useConnState();
   const connected = conn.state === "connected";
   const showBanner = conn.state === "reconnecting" || conn.state === "failed";
   const bannerWarn = conn.state === "reconnecting";
@@ -165,10 +179,16 @@ export function Shell({
           })}
         </nav>
 
-        {/* Connection summary footer: context name + RTT (0 = not measured). */}
+        {/* Connection summary footer: state indicator + context + RTT.
+            §18.3: connecting shows a spinner; the other states a color dot
+            (green connected / amber reconnecting / red failed / gray rest). */}
         <div className="border-t border-border px-4 py-2.5 text-xs text-[var(--fg-muted)]" data-testid="conn-summary">
           <span className="flex items-center gap-1.5">
-            <span className={`size-1.5 rounded-full ${statusDotClass(conn.state)}`} aria-hidden="true" />
+            {conn.state === "connecting" ? (
+              <Loader2 size={12} strokeWidth={1.75} className="shrink-0 animate-spin" aria-hidden="true" />
+            ) : (
+              <span className={`size-1.5 shrink-0 rounded-full ${statusDotClass(conn.state)}`} aria-hidden="true" />
+            )}
             {t(`conn.${conn.state}`)}
           </span>
           <span className="mt-1 block truncate text-[var(--fg-faint)]">
@@ -208,7 +228,9 @@ export function Shell({
         )}
         <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           {page !== "settings" && !connected ? (
-            <EmptyState page={page} onNavigate={onNavigate} />
+            // First run (no contexts yet) shows the guide card instead of
+            // the plain empty state (AC-001); the sidebar stays usable.
+            guide ?? <EmptyState page={page} onNavigate={onNavigate} />
           ) : (
             children
           )}
@@ -218,7 +240,8 @@ export function Shell({
   );
 }
 
-/** Placeholder shown on data pages while no connection is established. */
+/** Placeholder shown on data pages while no connection is established
+ * (§18.3 disconnected: "choose or create a connection" guidance card). */
 function EmptyState({ page, onNavigate }: { page: PageId; onNavigate: (p: PageId) => void }) {
   const { t } = useTranslation();
   return (
@@ -228,7 +251,7 @@ function EmptyState({ page, onNavigate }: { page: PageId; onNavigate: (p: PageId
     >
       <Unplug size={28} strokeWidth={1.75} className="text-[var(--fg-faint)]" />
       <h2 className="text-lg font-medium">{t(`nav.${page}`)}</h2>
-      <p className="text-sm text-[var(--fg-muted)]">{t("conn.disconnected")}</p>
+      <p className="text-sm text-[var(--fg-muted)]">{t("conn.chooseOrCreate")}</p>
       <p className="text-xs text-[var(--fg-faint)]">{t("common.comingSoon")}</p>
       <Button variant="outline" size="sm" className="mt-2" onClick={() => onNavigate("settings")}>
         {t("conn.fixConnection")}
