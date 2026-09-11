@@ -51,3 +51,6 @@ dist
 natscli
 nats/nats
 nats/main
+
+# brainstorm visual companion sessions
+.superpowers/
