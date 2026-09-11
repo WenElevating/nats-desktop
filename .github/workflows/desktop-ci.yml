@@ -1,0 +1,66 @@
+name: desktop-ci
+
+on:
+  pull_request:
+    paths: ["desktop/**", ".github/workflows/desktop-ci.yml"]
+  push:
+    branches: [main]
+    paths: ["desktop/**", ".github/workflows/desktop-ci.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - run: go vet ./...
+      # -race needs cgo (preinstalled MinGW on windows runners); kept in CI
+      # because the local toolchain cannot run it.
+      - run: go test ./... -race -count=1
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint src --max-warnings 0
+      - run: npx vitest run # includes the i18n completeness gate (spec AC-021, automated half)
+
+  build:
+    needs: [go, frontend]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.20
+      - run: wails3 build
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nats-desktop-windows
+          path: desktop/bin/
