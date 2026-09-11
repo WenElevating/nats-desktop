@@ -35,13 +35,15 @@ var traceMinVersion = [3]int{2, 11, 0}
 
 // TraceForm is one trace request. Deliver=false (the default) traces the route
 // only: the message carries Nats-Trace-Only and never reaches the final
-// subject. TimeoutMs (<=0 -> 5000) bounds each trace-response wait.
+// subject. TimeoutMs (<=0 -> settings default / 5000) bounds each
+// trace-response wait. The JSON tags are the frozen Wails-binding contract
+// (lowercase snake).
 type TraceForm struct {
-	Subject   string
-	Headers   map[string][]string
-	Payload   []byte
-	Deliver   bool
-	TimeoutMs int
+	Subject   string              `json:"subject"`
+	Headers   map[string][]string `json:"headers"`
+	Payload   []byte              `json:"payload"` // Go json encodes []byte as base64
+	Deliver   bool                `json:"deliver"`
+	TimeoutMs int                 `json:"timeout_ms"`
 }
 
 // TraceHop is one node of the trace tree. Kind is a closed set: "ingress",

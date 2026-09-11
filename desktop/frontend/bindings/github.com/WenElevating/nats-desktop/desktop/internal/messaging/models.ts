@@ -15,14 +15,20 @@ export interface JSPosition {
 
 /**
  * PubForm is one publish request. JetStream selects the acked publish path;
- * TimeoutMs (<=0 -> 5000) is the ack wait for that path only.
+ * TimeoutMs (<=0 -> settings default / 5000) is the ack wait for that path
+ * only. The JSON tags are the frozen Wails-binding contract (lowercase snake,
+ * like every other messaging wire type).
  */
 export interface PubForm {
-    "Subject": string;
-    "Headers": { [_ in string]?: string[] | null } | null;
-    "Payload": string | null;
-    "JetStream": boolean;
-    "TimeoutMs": number;
+    "subject": string;
+    "headers": { [_ in string]?: string[] | null } | null;
+
+    /**
+     * Go json encodes []byte as base64
+     */
+    "payload": string | null;
+    "jetstream": boolean;
+    "timeout_ms": number;
 }
 
 /**
@@ -60,13 +66,18 @@ export enum PushMode {
 };
 
 /**
- * ReqForm is one request (reply expected on an auto-generated inbox).
+ * ReqForm is one request (reply expected on an auto-generated inbox). The
+ * JSON tags are the frozen Wails-binding contract (lowercase snake).
  */
 export interface ReqForm {
-    "Subject": string;
-    "Headers": { [_ in string]?: string[] | null } | null;
-    "Payload": string | null;
-    "TimeoutMs": number;
+    "subject": string;
+    "headers": { [_ in string]?: string[] | null } | null;
+
+    /**
+     * Go json encodes []byte as base64
+     */
+    "payload": string | null;
+    "timeout_ms": number;
 }
 
 /**
@@ -118,14 +129,20 @@ export interface SessionState {
 /**
  * TraceForm is one trace request. Deliver=false (the default) traces the route
  * only: the message carries Nats-Trace-Only and never reaches the final
- * subject. TimeoutMs (<=0 -> 5000) bounds each trace-response wait.
+ * subject. TimeoutMs (<=0 -> settings default / 5000) bounds each
+ * trace-response wait. The JSON tags are the frozen Wails-binding contract
+ * (lowercase snake).
  */
 export interface TraceForm {
-    "Subject": string;
-    "Headers": { [_ in string]?: string[] | null } | null;
-    "Payload": string | null;
-    "Deliver": boolean;
-    "TimeoutMs": number;
+    "subject": string;
+    "headers": { [_ in string]?: string[] | null } | null;
+
+    /**
+     * Go json encodes []byte as base64
+     */
+    "payload": string | null;
+    "deliver": boolean;
+    "timeout_ms": number;
 }
 
 /**

@@ -11,6 +11,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -365,4 +366,46 @@ func TestServiceFullChainLocalServer(t *testing.T) {
 	}
 
 	_ = mgr // connected stack teardown via t.Cleanup
+}
+
+// TestServiceFormJSONPins locks the lowercase-snake Wails-binding contract of
+// the form structs (fix round 1): the generated frontend models derive from
+// these tags, so a rename would silently split the boundary (PascalCase forms
+// vs snake results). Payload is []byte — Go json encodes it as base64.
+func TestServiceFormJSONPins(t *testing.T) {
+	got, err := json.Marshal(PubForm{Subject: "s", Headers: map[string][]string{"X-A": {"1"}}, Payload: []byte("p"), JetStream: true, TimeoutMs: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPub := `{"subject":"s","headers":{"X-A":["1"]},"payload":"cA==","jetstream":true,"timeout_ms":7}`
+	if string(got) != wantPub {
+		t.Fatalf("PubForm JSON drifted:\n got  %s\n want %s", got, wantPub)
+	}
+
+	got, err = json.Marshal(ReqForm{Subject: "r", Payload: []byte("q"), TimeoutMs: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReq := `{"subject":"r","headers":null,"payload":"cQ==","timeout_ms":8}`
+	if string(got) != wantReq {
+		t.Fatalf("ReqForm JSON drifted:\n got  %s\n want %s", got, wantReq)
+	}
+
+	got, err = json.Marshal(TraceForm{Subject: "t", Deliver: true, TimeoutMs: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTrace := `{"subject":"t","headers":null,"payload":null,"deliver":true,"timeout_ms":9}`
+	if string(got) != wantTrace {
+		t.Fatalf("TraceForm JSON drifted:\n got  %s\n want %s", got, wantTrace)
+	}
+
+	// Round-trip: the frontend sends the same snake keys back.
+	var back PubForm
+	if err := json.Unmarshal([]byte(`{"subject":"s","payload":"cA==","timeout_ms":7}`), &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Subject != "s" || string(back.Payload) != "p" || back.TimeoutMs != 7 || back.JetStream {
+		t.Fatalf("PubForm round-trip = %+v", back)
+	}
 }

@@ -27,13 +27,15 @@ var (
 )
 
 // PubForm is one publish request. JetStream selects the acked publish path;
-// TimeoutMs (<=0 -> 5000) is the ack wait for that path only.
+// TimeoutMs (<=0 -> settings default / 5000) is the ack wait for that path
+// only. The JSON tags are the frozen Wails-binding contract (lowercase snake,
+// like every other messaging wire type).
 type PubForm struct {
-	Subject   string
-	Headers   map[string][]string
-	Payload   []byte
-	JetStream bool
-	TimeoutMs int
+	Subject   string              `json:"subject"`
+	Headers   map[string][]string `json:"headers"`
+	Payload   []byte              `json:"payload"` // Go json encodes []byte as base64
+	JetStream bool                `json:"jetstream"`
+	TimeoutMs int                 `json:"timeout_ms"`
 }
 
 // PubResult reports one publish. JSON tags are lowercase snake per the frozen
@@ -49,12 +51,13 @@ type PubResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// ReqForm is one request (reply expected on an auto-generated inbox).
+// ReqForm is one request (reply expected on an auto-generated inbox). The
+// JSON tags are the frozen Wails-binding contract (lowercase snake).
 type ReqForm struct {
-	Subject   string
-	Headers   map[string][]string
-	Payload   []byte
-	TimeoutMs int
+	Subject   string              `json:"subject"`
+	Headers   map[string][]string `json:"headers"`
+	Payload   []byte              `json:"payload"` // Go json encodes []byte as base64
+	TimeoutMs int                 `json:"timeout_ms"`
 }
 
 // ReqResult reports one request. NoResponder mirrors nats.ErrNoResponders;
