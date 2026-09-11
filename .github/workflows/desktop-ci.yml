@@ -64,3 +64,26 @@ jobs:
         with:
           name: nats-desktop-windows
           path: desktop/bin/
+
+  # Performance gates (Task 11). The Go floor test runs in a 2-core container
+  # to simulate the spec's 低配档 (spec §20 容器 CPU 限额模拟低配): the 50,000
+  # msg/s pipeline floor must hold on weak hardware. The frontend perf test is
+  # jsdom-logic-only (no NATS server needed; frame-rate validation is Task 13's
+  # live measurement). -buildvcs=false: the runner-owned checkout is mounted
+  # into a root-owned container, which git refuses without safe.directory.
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Go pipeline throughput floor (2-core container)
+        run: docker run --rm --cpus 2 -v ${{ github.workspace }}:/w -w /w/desktop golang:1.26 go test ./internal/messaging/ -run TestPipelineThroughputFloor -count=1 -buildvcs=false -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - run: npm ci
+        working-directory: desktop/frontend
+      - run: npx vitest run tests/messages-perf.test.ts
+        working-directory: desktop/frontend

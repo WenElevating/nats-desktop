@@ -12,31 +12,12 @@ import {
   type SessionSpec,
   type SessionState,
 } from "../../lib/bindings";
+import { applyMsgsBatch, applyStateUpsert, byId, DEFAULT_BUFFER, type MsgOut } from "./sessionsLogic";
 
-/**
- * One subscription-session message on the `session:msgs` wire (spec §7.1.3,
- * Go internal/messaging.MsgOut — snake JSON tags are a frozen contract; the
- * type is not generated because events are not part of the bindings surface).
- * Realtime mode arrives as a single-element array, batch mode as up to 500.
- */
-export interface MsgOut {
-  session_id: string;
-  seq: number;
-  subject: string;
-  headers?: { [key: string]: string[] | null } | null;
-  payload_b64: string;
-  payload_size: number;
-  timestamp: string;
-  stream_seq?: number;
-  is_utf8: boolean;
-}
-
-/**
- * Display cap when the creation spec leaves buffer_size <= 0 ("use the
- * configured default"): mirrors settings.Default() session_buffer_size. The
- * Go side owns the real cap; this only bounds frontend memory per session.
- */
-export const DEFAULT_BUFFER = 10000;
+// The wire type and display cap live in sessionsLogic.ts (pure state machine,
+// benchmarked in Task 11); re-exported here for the existing import surface.
+export { DEFAULT_BUFFER } from "./sessionsLogic";
+export type { MsgOut };
 
 /** The useSessions surface consumed by SessionsPanel / SessionView. */
 export interface SessionsApi {
@@ -48,8 +29,6 @@ export interface SessionsApi {
   clear: (id: string) => void;
   close: (id: string) => void;
 }
-
-const byId = (a: SessionState, b: SessionState) => a.id.localeCompare(b.id);
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -73,31 +52,14 @@ export function useSessions(): SessionsApi {
   const caps = useRef<Record<string, number>>({});
 
   const upsert = useCallback((st: SessionState) => {
-    if (!st || typeof st.id !== "string") return;
-    setSessions((prev) => {
-      const next = prev.some((s) => s.id === st.id)
-        ? prev.map((s) => (s.id === st.id ? { ...s, ...st } : s))
-        : [...prev, { ...st }];
-      return next.sort(byId);
-    });
+    setSessions((prev) => applyStateUpsert(prev, st));
   }, []);
 
   useEffect(() => {
     let alive = true;
 
     const offMsgs = Events.On("session:msgs", (e: { data?: unknown }) => {
-      const batch = Array.isArray(e?.data) ? (e.data as MsgOut[]) : [];
-      if (batch.length === 0) return;
-      setMessages((prev) => {
-        const next = { ...prev };
-        for (const m of batch) {
-          if (!m || typeof m.session_id !== "string") continue;
-          const cap = caps.current[m.session_id] ?? DEFAULT_BUFFER;
-          const list = next[m.session_id] ? [...next[m.session_id], m] : [m];
-          next[m.session_id] = list.length > cap ? list.slice(list.length - cap) : list;
-        }
-        return next;
-      });
+      setMessages((prev) => applyMsgsBatch(prev, e?.data, caps.current));
     });
 
     const offState = Events.On("session:state", (e: { data?: unknown }) => {
