@@ -4,7 +4,7 @@ import { it, expect, vi, beforeEach } from "vitest";
 import { toast } from "sonner";
 import { MessagesPage } from "../src/features/messages/MessagesPage";
 import { PubPanel } from "../src/features/messages/PubPanel";
-import { Publish, Request, GetSettings } from "../src/lib/bindings";
+import { Publish, Request, GetSettings, ListSessions } from "../src/lib/bindings";
 import { toBase64, toBase64Bytes } from "../src/lib/base64";
 
 // Scenario assertions match user-visible (interpolated) text — "Waited
@@ -23,7 +23,19 @@ vi.mock("../src/app/connstate", () => ({
   useConnState: () => connState,
 }));
 
+vi.mock("@wailsio/runtime", () => ({
+  Events: { On: vi.fn(() => () => {}) },
+}));
+
 vi.mock("../src/lib/bindings", () => ({
+  // Sessions surface (SessionsPanel is part of the MessagesPage graph).
+  PushMode: { PushRealtime: "realtime", PushBatch: "batch" },
+  CreateSession: vi.fn(),
+  PauseSession: vi.fn(),
+  ResumeSession: vi.fn(),
+  ClearSession: vi.fn(),
+  CloseSession: vi.fn(),
+  ListSessions: vi.fn(),
   Publish: vi.fn(),
   Request: vi.fn(),
   GetSettings: vi.fn(),
@@ -50,6 +62,7 @@ const settingsFixture = (requestTimeoutSeconds: number) => ({
 beforeEach(() => {
   connState.state = "connected";
   vi.mocked(GetSettings).mockResolvedValue(settingsFixture(5) as never);
+  vi.mocked(ListSessions).mockResolvedValue(null as never);
   vi.mocked(Publish).mockResolvedValue({ ok: true, jetstream: false, elapsed_ms: 7 });
   vi.mocked(Request).mockResolvedValue({
     ok: true,
@@ -306,7 +319,7 @@ it("clears the history on demand", async () => {
   expect(screen.queryByTestId("history-item")).toBeNull();
 });
 
-it("renders the three message tabs with placeholders for sessions and trace", async () => {
+it("renders the three message tabs with the sessions panel and a trace placeholder", async () => {
   render(<MessagesPage />);
   expect(screen.getByRole("tab", { name: "Publish" })).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Sessions" })).toBeTruthy();
@@ -316,7 +329,8 @@ it("renders the three message tabs with placeholders for sessions and trace", as
   // Radix tabs activate on mousedown (automatic activation), so the click
   // goes through userEvent's full pointer sequence.
   await userEvent.click(screen.getByRole("tab", { name: "Sessions" }));
-  expect(await screen.findByTestId("sessions-placeholder")).toBeTruthy();
+  expect(await screen.findByTestId("sessions-panel")).toBeTruthy();
+  expect(screen.queryByTestId("sessions-placeholder")).toBeNull();
   await userEvent.click(screen.getByRole("tab", { name: "Trace" }));
   expect(await screen.findByTestId("trace-placeholder")).toBeTruthy();
   await userEvent.click(screen.getByRole("tab", { name: "Publish" }));

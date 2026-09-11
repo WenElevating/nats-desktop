@@ -40,11 +40,13 @@ export {
   ResumeSession,
   Trace,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/messagingservice.js";
+// PushMode is a value export (a real TS enum): the create form must send one
+// of its members and never the $zero "" Go zero value.
+export { PushMode } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/models.js";
 export type {
   JSPosition,
   PubForm,
   PubResult,
-  PushMode,
   ReqForm,
   ReqResult,
   SessionSpec,
