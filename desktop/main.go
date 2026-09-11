@@ -181,6 +181,13 @@ func main() {
 		}(s.LastActiveContext)
 	}
 
+	// Ready marker: proves the full startup path (settings, logger, window,
+	// tray, services) completed before the event loop starts — the acceptance
+	// log line M1 lacked.
+	if logger != nil {
+		logger.Info("ready", "version", version.Current())
+	}
+
 	// Run the application. This blocks until the application has been exited.
 	err := app.Run()
 

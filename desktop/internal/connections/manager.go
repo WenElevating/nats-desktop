@@ -165,6 +165,18 @@ func (m *Manager) Disconnect() {
 	}
 }
 
+// Conn returns the current live connection, or nil when not connected.
+// The connection may be replaced by a later Connect/Disconnect; callers
+// must tolerate nats.ErrConnectionClosed on stale references.
+func (m *Manager) Conn() *nats.Conn {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state != StateConnected {
+		return nil
+	}
+	return m.nc
+}
+
 // Snapshot returns the current state as a StateEvent.
 func (m *Manager) Snapshot() StateEvent {
 	m.mu.Lock()

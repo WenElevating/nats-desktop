@@ -13,6 +13,7 @@ import (
 	"github.com/WenElevating/nats-desktop/desktop/internal/testutil"
 	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 )
 
 // eventRecorder captures every emit call. Connection handlers fire on
@@ -418,6 +419,72 @@ func TestReconnectBackoff(t *testing.T) {
 		if got := reconnectBackoff(c.attempts); got != c.want {
 			t.Fatalf("reconnectBackoff(%d) = %v, want %v", c.attempts, got, c.want)
 		}
+	}
+}
+
+// TestConnAccessor covers the Conn accessor across the full lifecycle:
+// nil before connect, live CONNECTED conn after, nil again after
+// disconnect (hermetic embedded-fixture path).
+func TestConnAccessor(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	m, events, store := newRecordingManager(t)
+	saveContext(t, store, "demo", url)
+	if m.Conn() != nil {
+		t.Fatal("no conn before connect")
+	}
+	if err := m.Connect(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, events, StateConnected, 5*time.Second)
+	if c := m.Conn(); c == nil || c.Status() != nats.CONNECTED {
+		t.Fatalf("expected live conn, got %v", c)
+	}
+	m.Disconnect()
+	waitForState(t, events, StateDisconnected, 5*time.Second)
+	if m.Conn() != nil {
+		t.Fatal("conn must be nil after disconnect")
+	}
+}
+
+// TestConnAccessorLocalServer runs the same accessor assertions against the
+// real long-lived local nats-server (M2 mandate: NATS-connectivity tests
+// exercise a real server whenever one is available). Skips cleanly when the
+// server is unreachable so CI without it still passes.
+func TestConnAccessorLocalServer(t *testing.T) {
+	const (
+		url = "nats://127.0.0.1:4333"
+		ctx = "m2-t1"
+	)
+
+	probe, err := nats.Connect(url, nats.Timeout(2*time.Second), nats.MaxReconnects(0))
+	if err != nil {
+		t.Skipf("local nats-server at %s unreachable: %v", url, err)
+	}
+	probe.Close()
+
+	m, events, store := newRecordingManager(t)
+	saveContext(t, store, ctx, url)
+	t.Cleanup(func() {
+		m.Disconnect()
+		if err := store.Delete(context.Background(), ctx); err != nil {
+			t.Errorf("delete context %q: %v", ctx, err)
+		}
+	})
+
+	if m.Conn() != nil {
+		t.Fatal("no conn before connect")
+	}
+	if err := m.Connect(context.Background(), ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, events, StateConnected, 5*time.Second)
+	if c := m.Conn(); c == nil || c.Status() != nats.CONNECTED {
+		t.Fatalf("expected live conn, got %v", c)
+	}
+	m.Disconnect()
+	waitForState(t, events, StateDisconnected, 5*time.Second)
+	if m.Conn() != nil {
+		t.Fatal("conn must be nil after disconnect")
 	}
 }
 

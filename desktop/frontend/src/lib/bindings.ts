@@ -10,6 +10,7 @@ import type { Settings } from "../../bindings/github.com/WenElevating/nats-deskt
 export { GetSettings, SaveSettings } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/settings/service.js";
 export type { Appearance, Behavior, Privacy, Settings } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/settings/models.js";
 export { OpenLogsDir } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/logging/service.js";
+export { CheckUpdate } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/version/service.js";
 export {
   CheckConnection,
   ConnSnapshot,
