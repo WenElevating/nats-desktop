@@ -1,9 +1,15 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
-import { Publish, Request, type PubForm, type ReqForm } from "../../lib/bindings";
+import {
+  GetSettings,
+  Publish,
+  Request,
+  type PubForm,
+  type ReqForm,
+} from "../../lib/bindings";
 import { toBase64, fromBase64Bytes, bytesToHex } from "../../lib/base64";
 import {
   PAYLOAD_MAX_BYTES,
@@ -106,6 +112,31 @@ export function PubPanel() {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendResult | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+
+  // Seed the timeout field from the user's request_timeout_seconds setting
+  // (§6.3): the Go service only resolves settings for timeout_ms <= 0, so a
+  // hardcoded value would make that setting dead config. The field stays
+  // editable for per-send overrides; a failed load keeps the 5s fallback.
+  useEffect(() => {
+    let alive = true;
+    GetSettings()
+      .then((s) => {
+        if (!alive) return;
+        const sec = s.behavior.request_timeout_seconds;
+        const ms = sec > 0 ? sec * 1000 : 5000;
+        setDraft((d) => ({ ...d, timeout: String(ms) }));
+      })
+      .catch(() => {
+        /* outside Wails (tests/plain browser) — the default stands */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Raw (pre-base64) payload size; memoized so typing does not re-encode
+  // multi-megabyte payloads on every keystroke.
+  const payloadBytes = useMemo(() => utf8Length(draft.payload), [draft.payload]);
 
   const patch = (p: Partial<ReturnType<typeof emptyDraft>>) =>
     setDraft((d) => ({ ...d, ...p }));
@@ -279,7 +310,7 @@ export function PubPanel() {
         <div className="flex items-center justify-between">
           <Label htmlFor="pub-payload">{t("messages.payload")}</Label>
           <span data-testid="payload-bytes" className="text-xs text-[var(--fg-faint)]">
-            {t("messages.payloadBytes", { bytes: utf8Length(draft.payload) })}
+            {t("messages.payloadBytes", { bytes: payloadBytes })}
           </span>
         </div>
         <textarea

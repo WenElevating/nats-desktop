@@ -4,7 +4,7 @@ import { it, expect, vi, beforeEach } from "vitest";
 import { toast } from "sonner";
 import { MessagesPage } from "../src/features/messages/MessagesPage";
 import { PubPanel } from "../src/features/messages/PubPanel";
-import { Publish, Request } from "../src/lib/bindings";
+import { Publish, Request, GetSettings } from "../src/lib/bindings";
 import { toBase64, toBase64Bytes } from "../src/lib/base64";
 
 // Scenario assertions match user-visible (interpolated) text — "Waited
@@ -26,12 +26,30 @@ vi.mock("../src/app/connstate", () => ({
 vi.mock("../src/lib/bindings", () => ({
   Publish: vi.fn(),
   Request: vi.fn(),
+  GetSettings: vi.fn(),
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
+/** Settings fixture mirroring bindings Default(); only the request timeout
+ * varies (it seeds the panel's timeout field on mount). */
+const settingsFixture = (requestTimeoutSeconds: number) => ({
+  appearance: { theme: "system", language: "en" },
+  behavior: {
+    poll_interval_seconds: 5,
+    request_timeout_seconds: requestTimeoutSeconds,
+    confirm_level: "standard",
+    session_push_batching: false,
+    session_buffer_size: 10000,
+    log_level: "info",
+  },
+  privacy: { crash_reports: false, update_check: true },
+  last_active_context: "",
+});
+
 beforeEach(() => {
   connState.state = "connected";
+  vi.mocked(GetSettings).mockResolvedValue(settingsFixture(5) as never);
   vi.mocked(Publish).mockResolvedValue({ ok: true, jetstream: false, elapsed_ms: 7 });
   vi.mocked(Request).mockResolvedValue({
     ok: true,
@@ -68,7 +86,7 @@ it("warns on a 5 MB payload and only publishes after confirmation", async () => 
   // Confirmation dialog first; nothing is sent before it is accepted.
   const dialog = await screen.findByRole("alertdialog");
   expect(within(dialog).getByText(/Large payload/)).toBeTruthy();
-  expect(within(dialog).getByText(/5\.0 MB/)).toBeTruthy();
+  expect(within(dialog).getByText(/5\.0 MiB/)).toBeTruthy();
   expect(Publish).not.toHaveBeenCalled();
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
@@ -86,7 +104,7 @@ it("rejects a 9 MB payload outright with the size notice", async () => {
 
   const reject = await screen.findByTestId("size-reject");
   expect(reject.textContent).toContain("8 MiB limit");
-  expect(reject.textContent).toContain("9.0 MB");
+  expect(reject.textContent).toContain("9.0 MiB");
   expect(Publish).not.toHaveBeenCalled();
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
@@ -145,6 +163,19 @@ it("disables the send button while disconnected", () => {
   const send = screen.getByTestId("send-button") as HTMLButtonElement;
   expect(send.disabled).toBe(true);
   expect(screen.getByTestId("not-connected")).toBeTruthy();
+});
+
+it("seeds the timeout field from the request_timeout_seconds setting and sends it", async () => {
+  vi.mocked(GetSettings).mockResolvedValue(settingsFixture(30) as never);
+  render(<PubPanel />);
+
+  const timeout = screen.getByLabelText("Timeout (ms)") as HTMLInputElement;
+  await waitFor(() => expect(timeout.value).toBe("30000"));
+
+  setSubject("telemetry");
+  fireEvent.click(screen.getByTestId("send-button"));
+  await waitFor(() => expect(Publish).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(Publish).mock.calls[0][0].timeout_ms).toBe(30000);
 });
 
 // ---- Additional coverage beyond the brief's scenarios ----
