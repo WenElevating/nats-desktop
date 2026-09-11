@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "../../app/i18n";
-import type { Settings } from "../../lib/bindings";
+import { OpenLogsDir, type Settings } from "../../lib/bindings";
 import "./SettingsPage.css";
 
 export interface SettingsPageProps {
@@ -49,8 +49,14 @@ export function SettingsPage({ settings, onSave }: SettingsPageProps) {
     }
   };
 
-  // OpenLogsDir binding arrives in Task 5; placeholder until then.
-  const openLogs = () => console.warn("OpenLogsDir binding not available yet (Task 5)");
+  // Opens %APPDATA%/nats-desktop/logs in the system file manager (spec §13).
+  const openLogs = async () => {
+    try {
+      await OpenLogsDir();
+    } catch (err) {
+      console.error("open logs dir failed:", err);
+    }
+  };
 
   return (
     <div className="settings-page">

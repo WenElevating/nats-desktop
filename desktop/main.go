@@ -6,6 +6,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/WenElevating/nats-desktop/desktop/internal/appdir"
+	"github.com/WenElevating/nats-desktop/desktop/internal/logging"
 	"github.com/WenElevating/nats-desktop/desktop/internal/settings"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -37,12 +39,14 @@ func main() {
 	// 'Mac' options tailor the application when running an macOS.
 	settingsPath, _ := settings.Path()
 	settingsSvc := settings.NewService(settingsPath)
+	s, _ := settings.Load(settingsPath)
 
-	app := application.New(application.Options{
+	opts := application.Options{
 		Name:        "nats-desktop",
 		Description: "A demo of using raw HTML & CSS",
 		Services: []application.Service{
 			application.NewService(settingsSvc),
+			application.NewService(logging.NewService()),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -50,7 +54,19 @@ func main() {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
-	})
+	}
+
+	// Rotating file logger (spec §13): injected as the Wails system logger
+	// so framework messages follow the same file/level policy.
+	logsDir, logsErr := appdir.LogsDir()
+	if logsErr == nil {
+		if logger, err := logging.New(logsDir, s.Behavior.LogLevel); err == nil {
+			opts.Logger = logger
+			opts.LogLevel = logging.ParseLevel(s.Behavior.LogLevel)
+		}
+	}
+
+	app := application.New(opts)
 
 	// Create a new window with the necessary options.
 	// 'Title' is the title of the window.

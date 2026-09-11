@@ -9,6 +9,7 @@ import type { Settings } from "../../bindings/github.com/WenElevating/nats-deskt
 
 export { GetSettings, SaveSettings } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/settings/service.js";
 export type { Appearance, Behavior, Privacy, Settings } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/settings/models.js";
+export { OpenLogsDir } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/logging/service.js";
 
 // Default mirrors settings.Default() in internal/settings/settings.go.
 // Keep the field values in sync with the Go side.

@@ -6,6 +6,7 @@ require (
 	github.com/nats-io/jsm.go v0.4.2-0.20260907110945-19fe165a004c
 	github.com/nats-io/nats-server/v2 v2.15.0-preview.1
 	github.com/wailsapp/wails/v3 v3.0.0-beta.20
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -27,7 +28,6 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
