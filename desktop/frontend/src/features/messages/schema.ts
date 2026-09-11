@@ -41,6 +41,24 @@ export const pubSchema = z.object({
 });
 export type PubFormValues = z.infer<typeof pubSchema>;
 
+/**
+ * The trace form draft (spec §6.5). Same subject rules as pubSchema; payload
+ * length is deliberately unchecked here — the Go Trace binding enforces
+ * MaxPayload (ErrPayloadTooLarge) and the panel surfaces it through the
+ * failure toast.
+ */
+export const traceSchema = z.object({
+  subject: z
+    .string()
+    .min(1, "messages.subjectInvalid")
+    .refine((s) => !/\s/.test(s), "messages.subjectInvalid"),
+  headers: z.array(
+    z.object({ key: z.string(), value: z.string() }),
+  ),
+  payload: z.string(),
+  timeoutMs: z.number().int(),
+});
+
 /** Group header rows into the wire shape; blank keys are dropped, an empty
  * set becomes null (PubForm.headers is nullable). */
 export function headersToWire(

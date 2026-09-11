@@ -2,22 +2,11 @@ import { useTranslation } from "../../app/i18n";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PubPanel } from "./PubPanel";
 import { SessionsPanel } from "./SessionsPanel";
-
-function TabPlaceholder({ testid, text }: { testid: string; text: string }) {
-  return (
-    <div
-      data-testid={testid}
-      className="flex flex-1 items-center justify-center p-8 text-sm text-[var(--fg-muted)]"
-    >
-      {text}
-    </div>
-  );
-}
+import { TracePanel } from "./TracePanel";
 
 /**
  * Messages page shell (spec §6.3): the publish/request workbench, the M2
- * subscription sessions tab (Task 9), and a placeholder for the message path
- * trace (Task 10).
+ * subscription sessions tab, and the message path trace tab (spec §6.5).
  */
 export function MessagesPage() {
   const { t } = useTranslation();
@@ -35,8 +24,8 @@ export function MessagesPage() {
         <TabsContent value="sessions" className="min-h-0 flex-1 flex flex-col">
           <SessionsPanel />
         </TabsContent>
-        <TabsContent value="trace" className="min-h-0 flex-1 flex flex-col">
-          <TabPlaceholder testid="trace-placeholder" text={t("messages.tracePlaceholder")} />
+        <TabsContent value="trace" className="min-h-0 flex-1 overflow-y-auto">
+          <TracePanel />
         </TabsContent>
       </Tabs>
     </div>

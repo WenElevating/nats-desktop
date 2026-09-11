@@ -38,6 +38,7 @@ vi.mock("../src/lib/bindings", () => ({
   ListSessions: vi.fn(),
   Publish: vi.fn(),
   Request: vi.fn(),
+  Trace: vi.fn(),
   GetSettings: vi.fn(),
 }));
 
@@ -319,7 +320,7 @@ it("clears the history on demand", async () => {
   expect(screen.queryByTestId("history-item")).toBeNull();
 });
 
-it("renders the three message tabs with the sessions panel and a trace placeholder", async () => {
+it("renders the three message tabs with the sessions and trace panels", async () => {
   render(<MessagesPage />);
   expect(screen.getByRole("tab", { name: "Publish" })).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Sessions" })).toBeTruthy();
@@ -332,7 +333,8 @@ it("renders the three message tabs with the sessions panel and a trace placehold
   expect(await screen.findByTestId("sessions-panel")).toBeTruthy();
   expect(screen.queryByTestId("sessions-placeholder")).toBeNull();
   await userEvent.click(screen.getByRole("tab", { name: "Trace" }));
-  expect(await screen.findByTestId("trace-placeholder")).toBeTruthy();
+  expect(await screen.findByTestId("trace-panel")).toBeTruthy();
+  expect(screen.queryByTestId("trace-placeholder")).toBeNull();
   await userEvent.click(screen.getByRole("tab", { name: "Publish" }));
   expect(await screen.findByTestId("pub-panel")).toBeTruthy();
 });
