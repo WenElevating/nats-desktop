@@ -1,11 +1,27 @@
 import { useState, useEffect, useRef } from 'react'
-import {Events, WML} from "@wailsio/runtime";
+import {Events, System, WML} from "@wailsio/runtime";
 import {GreetService} from "../bindings/github.com/WenElevating/nats-desktop/desktop";
+import { applyTheme, ThemeMode } from "./app/theme";
 
 // Show the actual Wails version this project was generated against.
 const wailsVersion = "v3.0.0-beta.20";
 
+export function useThemeController(mode: ThemeMode) {
+  const [systemDark, setSystemDark] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    System.IsDarkMode().then((d) => alive && setSystemDark(Boolean(d)));
+    const off = Events.On("common:ThemeChanged", (e) =>
+      setSystemDark(Boolean(e.data)),
+    );
+    return () => { alive = false; off(); };
+  }, []);
+  useEffect(() => applyTheme(mode, systemDark), [mode, systemDark]);
+}
+
 function App() {
+  useThemeController("system");
+
   const [name, setName] = useState<string>('');
   const [time, setTime] = useState<string>('Listening for Time event...');
 
