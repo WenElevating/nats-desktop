@@ -315,6 +315,92 @@ func TestConnectReplacesExistingConnection(t *testing.T) {
 	}
 }
 
+// blackholeURL returns a nats:// URL whose TCP port accepts connections
+// but never speaks the NATS protocol, so nats.Connect blocks for its full
+// Timeout (5s) before failing — a deterministic in-flight dial window.
+func blackholeURL(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			// Hold the connection open; never send INFO.
+			_ = c
+		}
+	}()
+	return "nats://" + l.Addr().String()
+}
+
+// TestDisconnectDuringInFlightConnect: a Disconnect that lands while
+// Connect is mid-dial is terminal (spec §10) — the late dial error must
+// not overwrite disconnected with failed, and no stale connecting may
+// remain.
+func TestDisconnectDuringInFlightConnect(t *testing.T) {
+	m, events, store := newRecordingManager(t)
+	saveContext(t, store, "bh", blackholeURL(t))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Connect(context.Background(), "bh")
+	}()
+
+	// The attempt is now inside the dial window (connecting emitted, dial
+	// hanging for the full 5s timeout).
+	waitForState(t, events, StateConnecting, 5*time.Second)
+	m.Disconnect()
+	waitForState(t, events, StateDisconnected, 5*time.Second)
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("in-flight connect against a blackhole must fail")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("connect goroutine did not finish")
+	}
+
+	// The dial error arrived after Disconnect: failed must never have
+	// been emitted and disconnected must be the final state.
+	events.mu.Lock()
+	states := make([]State, 0, len(events.events))
+	for _, ev := range events.events {
+		states = append(states, ev.State)
+	}
+	events.mu.Unlock()
+	for _, s := range states {
+		if s == StateFailed {
+			t.Fatalf("late dial error overwrote terminal disconnected with failed: %v", states)
+		}
+	}
+	assertLastState(t, events, StateDisconnected)
+	if ev := m.Snapshot(); ev.State != StateDisconnected {
+		t.Fatalf("snapshot after disconnect race: %+v", ev)
+	}
+}
+
+// TestConnectDialErrorGoesFailed covers connecting -> failed on an
+// immediate dial error (dead endpoint, no interruption).
+func TestConnectDialErrorGoesFailed(t *testing.T) {
+	m, events, store := newRecordingManager(t)
+	saveContext(t, store, "dead", "nats://127.0.0.1:1")
+
+	if err := m.Connect(context.Background(), "dead"); err == nil {
+		t.Fatal("dial to dead endpoint must fail")
+	}
+	waitForState(t, events, StateFailed, 5*time.Second)
+	assertLastState(t, events, StateFailed)
+	if ev := m.Snapshot(); ev.State != StateFailed || ev.Context != "dead" {
+		t.Fatalf("snapshot after dial error: %+v", ev)
+	}
+}
+
 func TestReconnectBackoff(t *testing.T) {
 	cases := []struct {
 		attempts int

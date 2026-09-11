@@ -92,21 +92,25 @@ func (m *Manager) Connect(ctx context.Context, name string) error {
 
 	// Stale handlers of the replaced connection are invalidated by the
 	// generation bump above; Close never blocks on callback dispatch.
+	// Every transition after the first critical section is gen-guarded:
+	// a Disconnect (or newer Connect) that lands mid-attempt owns the
+	// state machine from then on, and this attempt must not overwrite
+	// its terminal states (spec §10).
 	if old != nil {
 		old.Close()
-		m.setState(StateDisconnected, "")
+		m.setStateIfCurrent(gen, StateDisconnected, "")
 	}
 
-	m.setState(StateConnecting, "")
+	m.setStateIfCurrent(gen, StateConnecting, "")
 
 	cfg, err := m.reg.Load(ctx, name)
 	if err != nil {
-		m.setState(StateFailed, fmt.Sprintf("load context: %v", err))
+		m.setStateIfCurrent(gen, StateFailed, fmt.Sprintf("load context: %v", err))
 		return err
 	}
 	opts, err := cfg.NATSOptions()
 	if err != nil {
-		m.setState(StateFailed, fmt.Sprintf("context options: %v", err))
+		m.setStateIfCurrent(gen, StateFailed, fmt.Sprintf("context options: %v", err))
 		return err
 	}
 
@@ -124,7 +128,10 @@ func (m *Manager) Connect(ctx context.Context, name string) error {
 
 	nc, err := nats.Connect(cfg.ServerURL(), opts...)
 	if err != nil {
-		m.setState(StateFailed, err.Error())
+		// The dial may have taken up to Timeout (5s); if a Disconnect
+		// landed in that window it already emitted its terminal
+		// disconnected and the failure must not overwrite it.
+		m.setStateIfCurrent(gen, StateFailed, err.Error())
 		return err
 	}
 
@@ -320,10 +327,17 @@ func (m *Manager) onClosed(gen uint64) {
 	m.setStateLocked(StateFailed, "connection closed")
 }
 
-// setState transitions to state and emits EventConnState.
-func (m *Manager) setState(state State, reason string) {
+// setStateIfCurrent transitions to state only when gen is still the
+// Manager's current generation — i.e. neither a Disconnect nor a newer
+// Connect attempt has superseded the caller's attempt. It is a no-op
+// otherwise, so a mid-dial Disconnect keeps its terminal disconnected
+// state instead of being overwritten with failed/connecting (spec §10).
+func (m *Manager) setStateIfCurrent(gen uint64, state State, reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.gen != gen {
+		return
+	}
 	m.setStateLocked(state, reason)
 }
 
