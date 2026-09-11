@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Events, System } from "@wailsio/runtime";
 import { PlugZap, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -44,6 +44,10 @@ export function useThemeController(mode: ThemeMode): boolean {
   return dark;
 }
 
+// Messages is code-split: its chunk (publish/request workbench) loads on
+// first navigation, keeping the startup bundle small (M1 chunk-size note).
+const MessagesPage = lazy(() => import("./features/messages/MessagesPage"));
+
 /**
  * Placeholder for the pages landing in M2–M5 (Dashboard, Messages, Streams,
  * Consumers, KV, Objects, Monitoring). Only rendered while connected; the
@@ -58,6 +62,17 @@ function PagePlaceholder({ page }: { page: PageId }) {
     >
       <h2 className="text-lg font-medium">{t(`nav.${page}`)}</h2>
       <p className="text-sm text-[var(--fg-muted)]">{t("common.comingSoon")}</p>
+    </div>
+  );
+}
+
+/** Suspense fallback while a lazy page chunk is loading: a quiet skeleton. */
+function PageSkeleton() {
+  return (
+    <div data-testid="page-skeleton" aria-busy="true" className="flex flex-1 flex-col gap-3 p-6">
+      <div className="h-8 w-56 animate-pulse rounded-md bg-[var(--border-soft)]" />
+      <div className="h-9 w-72 animate-pulse rounded-md bg-[var(--border-soft)]" />
+      <div className="min-h-40 flex-1 animate-pulse rounded-md bg-[var(--border-soft)]" />
     </div>
   );
 }
@@ -244,6 +259,10 @@ function AppBody() {
               )}
             </div>
           </div>
+        ) : page === "messages" ? (
+          <Suspense fallback={<PageSkeleton />}>
+            <MessagesPage />
+          </Suspense>
         ) : (
           <PagePlaceholder page={page} />
         )}
