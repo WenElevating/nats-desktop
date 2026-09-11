@@ -70,6 +70,42 @@ func TestNoCredentialsInLog(t *testing.T) {
 	}
 }
 
+// TestRedactURLUserInfoMalformed 回归测试：url.Parse 失败的畸形 URL 里的
+// user:pass@ 也不得进入日志（解析失败时脱敏必须降级为掩盖，而非透传原文）。
+func TestRedactURLUserInfoMalformed(t *testing.T) {
+	cases := []struct {
+		name     string
+		rawURL   string
+		secret   string // 不得出现的机密子串
+		keepHost string // 必须保留的主机部分
+	}{
+		{"bad-percent-encoding", "nats://u:pa%ss@h:4222", "pa%ss", "h:4222"},
+		{"bad-port", "nats://alice:s3cret@host:4x22", "s3cret", "host"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, err := natscontext.New("malf", false, natscontext.WithServerURL(tc.rawURL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var sb strings.Builder
+			h := slog.NewTextHandler(&sb, nil)
+			rec := slog.NewRecord(slog.Record{}.Time, slog.LevelInfo, "m", 0)
+			rec.AddAttrs(slog.Attr{Key: "ctx", Value: RedactContext(ctx)})
+			if err := h.Handle(context.Background(), rec); err != nil {
+				t.Fatal(err)
+			}
+			out := sb.String()
+			if strings.Contains(out, tc.secret) {
+				t.Errorf("secret %q leaked via malformed URL: %q", tc.secret, out)
+			}
+			if !strings.Contains(out, tc.keepHost) {
+				t.Errorf("host %q missing after redaction: %q", tc.keepHost, out)
+			}
+		})
+	}
+}
+
 func TestParseLevel(t *testing.T) {
 	cases := map[string]slog.Level{
 		"debug": slog.LevelDebug,

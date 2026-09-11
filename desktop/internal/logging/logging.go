@@ -174,7 +174,10 @@ func optMasked(k, v string) slog.Attr {
 
 // redactURLUserInfo strips the user-info component (user:pass@ / token@) from
 // each URL of a comma-separated server list so credentials embedded in
-// connection strings never reach the log.
+// connection strings never reach the log. URLs that fail to parse are NOT
+// trusted: everything before the last '@' is masked instead (a failed parse
+// cannot prove the userinfo clean, and e.g. bad percent-encoding or ports
+// would otherwise leak user:pass@ verbatim).
 func redactURLUserInfo(urls string) string {
 	if urls == "" {
 		return ""
@@ -183,7 +186,11 @@ func redactURLUserInfo(urls string) string {
 	for i, p := range parts {
 		p = strings.TrimSpace(p)
 		u, err := url.Parse(p)
-		if err != nil || u.User == nil {
+		if err != nil {
+			parts[i] = maskUserinfo(p)
+			continue
+		}
+		if u.User == nil {
 			parts[i] = p
 			continue
 		}
@@ -191,6 +198,17 @@ func redactURLUserInfo(urls string) string {
 		parts[i] = u.String()
 	}
 	return strings.Join(parts, ",")
+}
+
+// maskUserinfo replaces everything before the last '@' with "***" so malformed
+// URLs keep at most their host part; '@' cannot legally appear unencoded in
+// the host, so the last '@' is the userinfo separator. Strings without '@'
+// pass through unchanged.
+func maskUserinfo(s string) string {
+	if i := strings.LastIndex(s, "@"); i >= 0 {
+		return "***" + s[i:]
+	}
+	return s
 }
 
 // OpenLogsDir opens the logs directory in the system file manager
