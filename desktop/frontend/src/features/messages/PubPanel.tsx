@@ -39,11 +39,19 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 type Mode = "publish" | "request";
 
-/** One finished send, as shown in the in-memory history (last 20, §6.3). */
+/** Payload preview cap per history row (spec §6.3: history carries the
+ * payload; one giant send must not flood the 48-row list). */
+const HISTORY_PREVIEW_CHARS = 120;
+
+/** One finished send, as shown in the in-memory history (last 20, §6.3).
+ * `at` is the send epoch (row shows HH:mm:ss); `preview` the truncated
+ * payload as typed (§6.3 history = subject/payload/time/result). */
 interface HistoryEntry {
   id: number;
   mode: Mode;
   subject: string;
+  at: number;
+  preview: string;
   ok: boolean;
   ms: number;
 }
@@ -61,6 +69,20 @@ const emptyDraft = () => ({
   msgId: "",
   timeout: "5000",
 });
+
+/** History payload preview: first 120 chars with an ellipsis when cut. */
+function payloadPreview(payload: string): string {
+  return payload.length > HISTORY_PREVIEW_CHARS
+    ? `${payload.slice(0, HISTORY_PREVIEW_CHARS)}…`
+    : payload;
+}
+
+/** Send epoch reduced to HH:MM:SS for the narrow history row. */
+function historyTime(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
 /** First zod issue message per top-level field (messages are i18n keys). */
 function collectErrors(issues: { path: PropertyKey[]; message: string }[]) {
@@ -179,7 +201,14 @@ export function PubPanel() {
         };
         const res = await Publish(form);
         setResult({ mode: "publish", res });
-        addHistory({ mode: "publish", subject: draft.subject, ok: res.ok, ms: res.elapsed_ms });
+        addHistory({
+          mode: "publish",
+          subject: draft.subject,
+          at: Date.now(),
+          preview: payloadPreview(draft.payload),
+          ok: res.ok,
+          ms: res.elapsed_ms,
+        });
       } else {
         const form: ReqForm = {
           subject: draft.subject,
@@ -189,7 +218,14 @@ export function PubPanel() {
         };
         const res = await Request(form);
         setResult({ mode: "request", res });
-        addHistory({ mode: "request", subject: draft.subject, ok: res.ok, ms: res.elapsed_ms });
+        addHistory({
+          mode: "request",
+          subject: draft.subject,
+          at: Date.now(),
+          preview: payloadPreview(draft.payload),
+          ok: res.ok,
+          ms: res.elapsed_ms,
+        });
       }
     } catch (err) {
       console.error(`${draft.mode} failed:`, err);
@@ -474,7 +510,16 @@ export function PubPanel() {
                     {t(h.mode === "publish" ? "messages.modePublish" : "messages.modeRequest")}
                   </Badge>
                   <span className="min-w-0 flex-1 truncate">{h.subject}</span>
-                  <span className={h.ok ? "text-[var(--ok-fg)]" : "text-[var(--danger-fg)]"}>
+                  <span
+                    data-testid="history-preview"
+                    className="max-w-48 shrink truncate text-[var(--fg-muted)]"
+                  >
+                    {h.preview}
+                  </span>
+                  <span data-testid="history-time" className="shrink-0 text-[var(--fg-faint)]">
+                    {historyTime(h.at)}
+                  </span>
+                  <span className={`shrink-0 ${h.ok ? "text-[var(--ok-fg)]" : "text-[var(--danger-fg)]"}`}>
                     {t("messages.duration", { ms: h.ms })}
                   </span>
                 </li>

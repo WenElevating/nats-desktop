@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "../../app/i18n";
-import type { SessionState } from "../../lib/bindings";
+import { PushMode, type SessionState } from "../../lib/bindings";
 import { bytesToHex, fromBase64, fromBase64Bytes } from "../../lib/base64";
 import { formatBytes } from "./schema";
 import type { MsgOut } from "./useSessions";
@@ -198,9 +198,10 @@ function MessageDetail({ msg }: { msg: MsgOut }) {
 }
 
 /**
- * One subscription session (spec §6.4): status bar (state dot, rate/total,
- * dropped badge, buffer count) with the pause/resume/clear/close actions, and
- * the virtualized monospace message list whose rows open the detail dialog.
+ * One subscription session (spec §6.4): status bar (state dot, push-mode
+ * badge, rate/total, dropped badge, buffer count) with the
+ * pause/resume/clear/close actions, and the virtualized monospace message
+ * list whose rows open the detail dialog.
  */
 export function SessionView({ session, msgs, onPause, onResume, onClear, onClose }: SessionViewProps) {
   const { t } = useTranslation();
@@ -225,6 +226,13 @@ export function SessionView({ session, msgs, onPause, onResume, onClear, onClose
         <span data-testid="session-state" className="text-sm font-medium">
           {t(stateKey(session.state))}
         </span>
+        <Badge variant="outline" data-testid="session-mode">
+          {t(
+            session.push_mode === PushMode.PushBatch
+              ? "messages.sessions.modeBatch"
+              : "messages.sessions.modeRealtime",
+          )}
+        </Badge>
         <span data-testid="session-rate" className="text-xs text-[var(--fg-muted)]">
           {t("messages.sessions.rate", { rate: rateLabel(session.rate_msg_s) })}
         </span>

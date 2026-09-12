@@ -232,6 +232,22 @@ it("refreshes rate/total/dropped from session:state and marks the paused state",
   await waitFor(() => expect(screen.queryByTestId("session-dropped")).toBeNull());
 });
 
+it("shows the push-mode badge per mode in the status bar", async () => {
+  await renderWithSession();
+  expect(await screen.findByTestId("session-mode")).toBeTruthy();
+  expect(screen.getByTestId("session-mode").textContent).toContain("Realtime");
+
+  fireState(state({ push_mode: "batch" as PushMode }));
+  await waitFor(() =>
+    expect(screen.getByTestId("session-mode").textContent).toContain("Batch"),
+  );
+
+  fireState(state({ push_mode: "realtime" as PushMode }));
+  await waitFor(() =>
+    expect(screen.getByTestId("session-mode").textContent).toContain("Realtime"),
+  );
+});
+
 it("pauses, resumes, clears and closes with immediate local feedback", async () => {
   await renderWithSession();
   fireMsgs([msg(1), msg(2)]);

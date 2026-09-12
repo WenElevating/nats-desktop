@@ -45,7 +45,9 @@ const (
 // SessionSpec is the creation request for one subscription session
 // (spec §6.4). BufferSize <= 0 means "use the configured default" and is
 // resolved before the messaging layer sees the value; JSPosition selects
-// JetStream replay positioning (nil / mode "new" = plain core subscription).
+// JetStream replay positioning (nil = plain core subscription; every
+// non-nil JSPosition — including mode "new" — takes the JetStream path,
+// and an empty mode is rejected).
 // The JSON tags are a frozen frontend contract.
 type SessionSpec struct {
 	Subject    string      `json:"subject"`

@@ -158,7 +158,7 @@ it("shows the no-responder notice with the waited duration", async () => {
   expect(notice.textContent).toContain("Waited 1234 ms");
 });
 
-it("records each send in the in-memory history", async () => {
+it("records each send in the in-memory history with payload preview and time", async () => {
   render(<PubPanel />);
   setSubject("telemetry");
   setPayload("hello");
@@ -168,6 +168,18 @@ it("records each send in the in-memory history", async () => {
   const history = screen.getByTestId("pub-history");
   expect(within(history).getAllByTestId("history-item")).toHaveLength(1);
   expect(within(history).getByText("telemetry")).toBeTruthy();
+  // Spec §6.3 history row: subject + truncated payload preview + send time.
+  expect(within(history).getByTestId("history-preview").textContent).toBe("hello");
+  expect(within(history).getByTestId("history-time").textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+
+  // Previews are truncated to the first 120 chars with an ellipsis marker.
+  setSubject("big");
+  setPayload("x".repeat(200));
+  fireEvent.click(screen.getByTestId("send-button"));
+  await waitFor(() => expect(within(history).getAllByTestId("history-item")).toHaveLength(2));
+  expect(within(history).getAllByTestId("history-preview")[0].textContent).toBe(
+    `${"x".repeat(120)}…`,
+  );
 });
 
 it("disables the send button while disconnected", () => {
