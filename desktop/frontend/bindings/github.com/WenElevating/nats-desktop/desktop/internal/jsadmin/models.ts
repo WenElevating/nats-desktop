@@ -15,10 +15,11 @@ export class BrowserMsg {
     "is_utf8": boolean;
 
     /**
-     * Truncated=true 时 PayloadB64 仅携带前 64KB（行级预览上限），
-     * PayloadSize 仍为完整大小；完整内容经 GetStreamMessage / 下载获取。
-     * 防止大消息页（如 50×2MB）把单页载荷推到百 MB 级（§6.6「仅展示
-     * 元数据与十六进制预览」的 wire 半边）。
+     * 仅 >1MB 的消息触发截断（spec §6.6）：Truncated=true 时 PayloadB64
+     * 只携带前 64KB 前缀（行级预览上限），PayloadSize 仍为完整大小；完整
+     * 内容经 GetStreamMessage / 下载获取。≤1MB 的消息整包内联。防止大
+     * 消息页（如 50×2MB）把单页载荷推到百 MB 级（§6.6「仅展示元数据与
+     * 十六进制预览」的 wire 半边）。
      */
     "truncated": boolean;
 
@@ -237,6 +238,304 @@ export class ClusterOut {
     }
 }
 
+export class ConsumerDetail {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "summary": ConsumerSummary;
+    "form": ConsumerForm;
+    "cluster": ClusterOut | null;
+
+    /** Creates a new ConsumerDetail instance. */
+    constructor($$source: Partial<ConsumerDetail> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("summary" in $$source)) {
+            this["summary"] = (new ConsumerSummary());
+        }
+        if (!("form" in $$source)) {
+            this["form"] = (new ConsumerForm());
+        }
+        if (!("cluster" in $$source)) {
+            this["cluster"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ConsumerDetail instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ConsumerDetail {
+        const $$createField2_0 = $$createType6;
+        const $$createField3_0 = $$createType7;
+        const $$createField4_0 = $$createType9;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("summary" in $$parsedSource) {
+            $$parsedSource["summary"] = $$createField2_0($$parsedSource["summary"]);
+        }
+        if ("form" in $$parsedSource) {
+            $$parsedSource["form"] = $$createField3_0($$parsedSource["form"]);
+        }
+        if ("cluster" in $$parsedSource) {
+            $$parsedSource["cluster"] = $$createField4_0($$parsedSource["cluster"]);
+        }
+        return new ConsumerDetail($$parsedSource as Partial<ConsumerDetail>);
+    }
+}
+
+/**
+ * ConsumerForm: 编辑时 deliver_policy/opt_start_* 由服务端原值回填、UI 禁改。
+ */
+export class ConsumerForm {
+    "stream": string;
+    "durable": string;
+    "description": string;
+
+    /**
+     * pull | push
+     */
+    "deliver_mode": string;
+    "deliver_subject": string;
+    "deliver_group": string;
+    "filter_subjects": string[];
+
+    /**
+     * explicit | none | all
+     */
+    "ack_policy": string;
+    "ack_wait_seconds": number;
+    "max_deliver": number;
+    "max_waiting": number;
+    "max_ack_pending": number;
+    "max_request_batch": number;
+    "max_request_expires_seconds": number;
+    "max_request_max_bytes": number;
+    "backoff_seconds": number[];
+
+    /**
+     * instant | original
+     */
+    "replay_policy": string;
+
+    /**
+     * all | last | new | start_sequence | start_time
+     */
+    "deliver_policy": string;
+    "opt_start_seq": number;
+    "opt_start_time_ms": number;
+    "priority_groups": string[];
+    "headers_only": boolean;
+    "replicas": number;
+    "memory_storage": boolean;
+    "inactive_threshold_seconds": number;
+
+    /** Creates a new ConsumerForm instance. */
+    constructor($$source: Partial<ConsumerForm> = {}) {
+        if (!("stream" in $$source)) {
+            this["stream"] = "";
+        }
+        if (!("durable" in $$source)) {
+            this["durable"] = "";
+        }
+        if (!("description" in $$source)) {
+            this["description"] = "";
+        }
+        if (!("deliver_mode" in $$source)) {
+            this["deliver_mode"] = "";
+        }
+        if (!("deliver_subject" in $$source)) {
+            this["deliver_subject"] = "";
+        }
+        if (!("deliver_group" in $$source)) {
+            this["deliver_group"] = "";
+        }
+        if (!("filter_subjects" in $$source)) {
+            this["filter_subjects"] = [];
+        }
+        if (!("ack_policy" in $$source)) {
+            this["ack_policy"] = "";
+        }
+        if (!("ack_wait_seconds" in $$source)) {
+            this["ack_wait_seconds"] = 0;
+        }
+        if (!("max_deliver" in $$source)) {
+            this["max_deliver"] = 0;
+        }
+        if (!("max_waiting" in $$source)) {
+            this["max_waiting"] = 0;
+        }
+        if (!("max_ack_pending" in $$source)) {
+            this["max_ack_pending"] = 0;
+        }
+        if (!("max_request_batch" in $$source)) {
+            this["max_request_batch"] = 0;
+        }
+        if (!("max_request_expires_seconds" in $$source)) {
+            this["max_request_expires_seconds"] = 0;
+        }
+        if (!("max_request_max_bytes" in $$source)) {
+            this["max_request_max_bytes"] = 0;
+        }
+        if (!("backoff_seconds" in $$source)) {
+            this["backoff_seconds"] = [];
+        }
+        if (!("replay_policy" in $$source)) {
+            this["replay_policy"] = "";
+        }
+        if (!("deliver_policy" in $$source)) {
+            this["deliver_policy"] = "";
+        }
+        if (!("opt_start_seq" in $$source)) {
+            this["opt_start_seq"] = 0;
+        }
+        if (!("opt_start_time_ms" in $$source)) {
+            this["opt_start_time_ms"] = 0;
+        }
+        if (!("priority_groups" in $$source)) {
+            this["priority_groups"] = [];
+        }
+        if (!("headers_only" in $$source)) {
+            this["headers_only"] = false;
+        }
+        if (!("replicas" in $$source)) {
+            this["replicas"] = 0;
+        }
+        if (!("memory_storage" in $$source)) {
+            this["memory_storage"] = false;
+        }
+        if (!("inactive_threshold_seconds" in $$source)) {
+            this["inactive_threshold_seconds"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ConsumerForm instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ConsumerForm {
+        const $$createField6_0 = $$createType0;
+        const $$createField15_0 = $$createType10;
+        const $$createField20_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("filter_subjects" in $$parsedSource) {
+            $$parsedSource["filter_subjects"] = $$createField6_0($$parsedSource["filter_subjects"]);
+        }
+        if ("backoff_seconds" in $$parsedSource) {
+            $$parsedSource["backoff_seconds"] = $$createField15_0($$parsedSource["backoff_seconds"]);
+        }
+        if ("priority_groups" in $$parsedSource) {
+            $$parsedSource["priority_groups"] = $$createField20_0($$parsedSource["priority_groups"]);
+        }
+        return new ConsumerForm($$parsedSource as Partial<ConsumerForm>);
+    }
+}
+
+export class ConsumerSummary {
+    "name": string;
+    "stream": string;
+    "is_pull": boolean;
+    "is_ephemeral": boolean;
+    "ack_policy": string;
+    "deliver_policy": string;
+    "filter_subjects": string[];
+    "num_pending": number;
+    "num_ack_pending": number;
+    "ack_floor_consumer": number;
+    "num_redelivered": number;
+    "num_waiting": number;
+    "delivered_consumer_seq": number;
+    "paused": boolean;
+    "pause_remaining_ms": number;
+    "created_ms": number;
+    "leader_missing": boolean;
+    "unhealthy_replicas": number;
+    "replica_count": number;
+
+    /** Creates a new ConsumerSummary instance. */
+    constructor($$source: Partial<ConsumerSummary> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("stream" in $$source)) {
+            this["stream"] = "";
+        }
+        if (!("is_pull" in $$source)) {
+            this["is_pull"] = false;
+        }
+        if (!("is_ephemeral" in $$source)) {
+            this["is_ephemeral"] = false;
+        }
+        if (!("ack_policy" in $$source)) {
+            this["ack_policy"] = "";
+        }
+        if (!("deliver_policy" in $$source)) {
+            this["deliver_policy"] = "";
+        }
+        if (!("filter_subjects" in $$source)) {
+            this["filter_subjects"] = [];
+        }
+        if (!("num_pending" in $$source)) {
+            this["num_pending"] = 0;
+        }
+        if (!("num_ack_pending" in $$source)) {
+            this["num_ack_pending"] = 0;
+        }
+        if (!("ack_floor_consumer" in $$source)) {
+            this["ack_floor_consumer"] = 0;
+        }
+        if (!("num_redelivered" in $$source)) {
+            this["num_redelivered"] = 0;
+        }
+        if (!("num_waiting" in $$source)) {
+            this["num_waiting"] = 0;
+        }
+        if (!("delivered_consumer_seq" in $$source)) {
+            this["delivered_consumer_seq"] = 0;
+        }
+        if (!("paused" in $$source)) {
+            this["paused"] = false;
+        }
+        if (!("pause_remaining_ms" in $$source)) {
+            this["pause_remaining_ms"] = 0;
+        }
+        if (!("created_ms" in $$source)) {
+            this["created_ms"] = 0;
+        }
+        if (!("leader_missing" in $$source)) {
+            this["leader_missing"] = false;
+        }
+        if (!("unhealthy_replicas" in $$source)) {
+            this["unhealthy_replicas"] = 0;
+        }
+        if (!("replica_count" in $$source)) {
+            this["replica_count"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ConsumerSummary instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ConsumerSummary {
+        const $$createField6_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("filter_subjects" in $$parsedSource) {
+            $$parsedSource["filter_subjects"] = $$createField6_0($$parsedSource["filter_subjects"]);
+        }
+        return new ConsumerSummary($$parsedSource as Partial<ConsumerSummary>);
+    }
+}
+
 export class GetMsgResult {
     "error_code": string;
 
@@ -265,12 +564,53 @@ export class GetMsgResult {
      * Creates a new GetMsgResult instance from a string or object.
      */
     static createFrom($$source: any = {}): GetMsgResult {
-        const $$createField2_0 = $$createType6;
+        const $$createField2_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("msg" in $$parsedSource) {
             $$parsedSource["msg"] = $$createField2_0($$parsedSource["msg"]);
         }
         return new GetMsgResult($$parsedSource as Partial<GetMsgResult>);
+    }
+}
+
+export class ListConsumersResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "consumers": ConsumerSummary[];
+    "unavailable_reason": string;
+
+    /** Creates a new ListConsumersResult instance. */
+    constructor($$source: Partial<ListConsumersResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("consumers" in $$source)) {
+            this["consumers"] = [];
+        }
+        if (!("unavailable_reason" in $$source)) {
+            this["unavailable_reason"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ListConsumersResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ListConsumersResult {
+        const $$createField2_0 = $$createType12;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("consumers" in $$parsedSource) {
+            $$parsedSource["consumers"] = $$createField2_0($$parsedSource["consumers"]);
+        }
+        return new ListConsumersResult($$parsedSource as Partial<ListConsumersResult>);
     }
 }
 
@@ -314,12 +654,122 @@ export class ListStreamsResult {
      * Creates a new ListStreamsResult instance from a string or object.
      */
     static createFrom($$source: any = {}): ListStreamsResult {
-        const $$createField2_0 = $$createType8;
+        const $$createField2_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("streams" in $$parsedSource) {
             $$parsedSource["streams"] = $$createField2_0($$parsedSource["streams"]);
         }
         return new ListStreamsResult($$parsedSource as Partial<ListStreamsResult>);
+    }
+}
+
+export class NextMsg {
+    "seq": number;
+    "subject": string;
+    "headers": { [_ in string]?: string[] };
+    "payload_b64": string;
+    "payload_size": number;
+    "timestamp_ms": number;
+    "is_utf8": boolean;
+
+    /**
+     * 仅 >1MB 的消息触发截断（spec §6.6）：Truncated=true 时 PayloadB64
+     * 只携带前 64KB 前缀（行级预览上限），PayloadSize 仍为完整大小；完整
+     * 内容经 GetStreamMessage / 下载获取。≤1MB 的消息整包内联。防止大
+     * 消息页（如 50×2MB）把单页载荷推到百 MB 级（§6.6「仅展示元数据与
+     * 十六进制预览」的 wire 半边）。
+     */
+    "truncated": boolean;
+    "num_delivered": number;
+    "num_pending": number;
+
+    /** Creates a new NextMsg instance. */
+    constructor($$source: Partial<NextMsg> = {}) {
+        if (!("seq" in $$source)) {
+            this["seq"] = 0;
+        }
+        if (!("subject" in $$source)) {
+            this["subject"] = "";
+        }
+        if (!("headers" in $$source)) {
+            this["headers"] = {};
+        }
+        if (!("payload_b64" in $$source)) {
+            this["payload_b64"] = "";
+        }
+        if (!("payload_size" in $$source)) {
+            this["payload_size"] = 0;
+        }
+        if (!("timestamp_ms" in $$source)) {
+            this["timestamp_ms"] = 0;
+        }
+        if (!("is_utf8" in $$source)) {
+            this["is_utf8"] = false;
+        }
+        if (!("truncated" in $$source)) {
+            this["truncated"] = false;
+        }
+        if (!("num_delivered" in $$source)) {
+            this["num_delivered"] = 0;
+        }
+        if (!("num_pending" in $$source)) {
+            this["num_pending"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new NextMsg instance from a string or object.
+     */
+    static createFrom($$source: any = {}): NextMsg {
+        const $$createField2_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("headers" in $$parsedSource) {
+            $$parsedSource["headers"] = $$createField2_0($$parsedSource["headers"]);
+        }
+        return new NextMsg($$parsedSource as Partial<NextMsg>);
+    }
+}
+
+export class PauseResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "paused": boolean;
+    "until_ms": number;
+    "remaining_ms": number;
+
+    /** Creates a new PauseResult instance. */
+    constructor($$source: Partial<PauseResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("paused" in $$source)) {
+            this["paused"] = false;
+        }
+        if (!("until_ms" in $$source)) {
+            this["until_ms"] = 0;
+        }
+        if (!("remaining_ms" in $$source)) {
+            this["remaining_ms"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PauseResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): PauseResult {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PauseResult($$parsedSource as Partial<PauseResult>);
     }
 }
 
@@ -357,6 +807,43 @@ export class PeerOut {
     static createFrom($$source: any = {}): PeerOut {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new PeerOut($$parsedSource as Partial<PeerOut>);
+    }
+}
+
+export class PreviewNextResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "messages": NextMsg[];
+
+    /** Creates a new PreviewNextResult instance. */
+    constructor($$source: Partial<PreviewNextResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("messages" in $$source)) {
+            this["messages"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PreviewNextResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): PreviewNextResult {
+        const $$createField2_0 = $$createType16;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("messages" in $$parsedSource) {
+            $$parsedSource["messages"] = $$createField2_0($$parsedSource["messages"]);
+        }
+        return new PreviewNextResult($$parsedSource as Partial<PreviewNextResult>);
     }
 }
 
@@ -491,12 +978,12 @@ export class StreamDetail {
      * Creates a new StreamDetail instance from a string or object.
      */
     static createFrom($$source: any = {}): StreamDetail {
-        const $$createField2_0 = $$createType7;
-        const $$createField3_0 = $$createType9;
-        const $$createField5_0 = $$createType10;
-        const $$createField6_0 = $$createType12;
-        const $$createField7_0 = $$createType13;
-        const $$createField8_0 = $$createType15;
+        const $$createField2_0 = $$createType13;
+        const $$createField3_0 = $$createType17;
+        const $$createField5_0 = $$createType18;
+        const $$createField6_0 = $$createType20;
+        const $$createField7_0 = $$createType21;
+        const $$createField8_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("summary" in $$parsedSource) {
             $$parsedSource["summary"] = $$createField2_0($$parsedSource["summary"]);
@@ -605,8 +1092,8 @@ export class StreamForm {
     static createFrom($$source: any = {}): StreamForm {
         const $$createField2_0 = $$createType0;
         const $$createField11_0 = $$createType0;
-        const $$createField12_0 = $$createType17;
-        const $$createField13_0 = $$createType18;
+        const $$createField12_0 = $$createType23;
+        const $$createField13_0 = $$createType24;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subjects" in $$parsedSource) {
             $$parsedSource["subjects"] = $$createField2_0($$parsedSource["subjects"]);
@@ -802,16 +1289,22 @@ const $$createType2 = BrowserMsg.createFrom;
 const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = PeerOut.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = $Create.Nullable($$createType2);
-const $$createType7 = StreamSummary.createFrom;
-const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = StreamForm.createFrom;
-const $$createType10 = StreamStateOut.createFrom;
-const $$createType11 = SourceInfo.createFrom;
-const $$createType12 = $Create.Nullable($$createType11);
-const $$createType13 = $Create.Array($$createType11);
-const $$createType14 = ClusterOut.createFrom;
-const $$createType15 = $Create.Nullable($$createType14);
-const $$createType16 = StreamSourceForm.createFrom;
-const $$createType17 = $Create.Nullable($$createType16);
-const $$createType18 = $Create.Array($$createType16);
+const $$createType6 = ConsumerSummary.createFrom;
+const $$createType7 = ConsumerForm.createFrom;
+const $$createType8 = ClusterOut.createFrom;
+const $$createType9 = $Create.Nullable($$createType8);
+const $$createType10 = $Create.Array($Create.Any);
+const $$createType11 = $Create.Nullable($$createType2);
+const $$createType12 = $Create.Array($$createType6);
+const $$createType13 = StreamSummary.createFrom;
+const $$createType14 = $Create.Array($$createType13);
+const $$createType15 = NextMsg.createFrom;
+const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = StreamForm.createFrom;
+const $$createType18 = StreamStateOut.createFrom;
+const $$createType19 = SourceInfo.createFrom;
+const $$createType20 = $Create.Nullable($$createType19);
+const $$createType21 = $Create.Array($$createType19);
+const $$createType22 = StreamSourceForm.createFrom;
+const $$createType23 = $Create.Nullable($$createType22);
+const $$createType24 = $Create.Array($$createType22);

@@ -33,8 +33,20 @@ export function BrowseStream(req: $models.BrowserPageRequest): $CancellablePromi
     });
 }
 
+export function CopyConsumer(stream: string, name: string, newName: string): $CancellablePromise<$models.CallResult> {
+    return $Call.ByID(3974582973, stream, name, newName).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
 export function CopyStream(src: string, newName: string): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(2039655769, src, newName).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
+export function CreateConsumer(form: $models.ConsumerForm): $CancellablePromise<$models.CallResult> {
+    return $Call.ByID(2766214020, form).then(($result: any) => {
         return $$createType1($result);
     });
 }
@@ -45,15 +57,27 @@ export function CreateStream(form: $models.StreamForm): $CancellablePromise<$mod
     });
 }
 
+export function DeleteConsumer(stream: string, name: string): $CancellablePromise<$models.CallResult> {
+    return $Call.ByID(3636108607, stream, name).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
 export function DeleteStream(name: string): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(2288360423, name).then(($result: any) => {
         return $$createType1($result);
     });
 }
 
+export function GetConsumerDetail(stream: string, name: string): $CancellablePromise<$models.ConsumerDetail> {
+    return $Call.ByID(2433991061, stream, name).then(($result: any) => {
+        return $$createType2($result);
+    });
+}
+
 export function GetStreamDetail(name: string): $CancellablePromise<$models.StreamDetail> {
     return $Call.ByID(3400850361, name).then(($result: any) => {
-        return $$createType2($result);
+        return $$createType3($result);
     });
 }
 
@@ -65,19 +89,37 @@ export function GetStreamDetail(name: string): $CancellablePromise<$models.Strea
  */
 export function GetStreamMessage(stream: string, seq: number): $CancellablePromise<$models.GetMsgResult> {
     return $Call.ByID(633748527, stream, seq).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType4($result);
+    });
+}
+
+export function ListConsumers(stream: string): $CancellablePromise<$models.ListConsumersResult> {
+    return $Call.ByID(1975139201, stream).then(($result: any) => {
+        return $$createType5($result);
     });
 }
 
 export function ListStreams(): $CancellablePromise<$models.ListStreamsResult> {
     return $Call.ByID(1500379901).then(($result: any) => {
-        return $$createType4($result);
+        return $$createType6($result);
+    });
+}
+
+export function PauseConsumer(stream: string, name: string, seconds: number): $CancellablePromise<$models.PauseResult> {
+    return $Call.ByID(1797297558, stream, name, seconds).then(($result: any) => {
+        return $$createType7($result);
+    });
+}
+
+export function PreviewNext(stream: string, name: string, batch: number, autoAck: boolean): $CancellablePromise<$models.PreviewNextResult> {
+    return $Call.ByID(1928994473, stream, name, batch, autoAck).then(($result: any) => {
+        return $$createType8($result);
     });
 }
 
 export function PurgeStream(name: string, keep: number, upToSeq: number, subject: string): $CancellablePromise<$models.PurgeResult> {
     return $Call.ByID(321277507, name, keep, upToSeq, subject).then(($result: any) => {
-        return $$createType5($result);
+        return $$createType9($result);
     });
 }
 
@@ -93,8 +135,26 @@ export function RemoveStreamMessage(stream: string, seq: number): $CancellablePr
     });
 }
 
+export function ResetConsumer(stream: string, name: string, toSeq: number): $CancellablePromise<$models.CallResult> {
+    return $Call.ByID(2837509387, stream, name, toSeq).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
+export function ResumeConsumer(stream: string, name: string): $CancellablePromise<$models.CallResult> {
+    return $Call.ByID(2789968567, stream, name).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
 export function SealStream(name: string): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(475763909, name).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
+export function UpdateConsumer(form: $models.ConsumerForm): $CancellablePromise<$models.CallResult> {
+    return $Call.ByID(308510449, form).then(($result: any) => {
         return $$createType1($result);
     });
 }
@@ -108,7 +168,11 @@ export function UpdateStream(form: $models.StreamForm): $CancellablePromise<$mod
 // Private type creation functions
 const $$createType0 = $models.BrowserPageResult.createFrom;
 const $$createType1 = $models.CallResult.createFrom;
-const $$createType2 = $models.StreamDetail.createFrom;
-const $$createType3 = $models.GetMsgResult.createFrom;
-const $$createType4 = $models.ListStreamsResult.createFrom;
-const $$createType5 = $models.PurgeResult.createFrom;
+const $$createType2 = $models.ConsumerDetail.createFrom;
+const $$createType3 = $models.StreamDetail.createFrom;
+const $$createType4 = $models.GetMsgResult.createFrom;
+const $$createType5 = $models.ListConsumersResult.createFrom;
+const $$createType6 = $models.ListStreamsResult.createFrom;
+const $$createType7 = $models.PauseResult.createFrom;
+const $$createType8 = $models.PreviewNextResult.createFrom;
+const $$createType9 = $models.PurgeResult.createFrom;

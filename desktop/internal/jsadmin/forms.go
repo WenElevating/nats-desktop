@@ -55,6 +55,14 @@ func ClassifyError(err error) CallResult {
 			return fail(CodeNotFound, ae.Error())
 		case ae.Code == 400, ae.UserError():
 			return fail(CodeValidation, ae.Error())
+		case ae.ErrCode == 10012:
+			// JSConsumerCreateErrF「consumer creation failed: {err}」：服务器把
+			// 消费者创建/更新的配置类拒绝（含不可变字段检查"deliver policy can
+			// not be updated"等）统一包进这个 HTTP 500 信封（errors.json code:
+			// 500, err_code: 10012）。语义上是表单级拒绝（前端表单内联显示），
+			// 故按 validation 分类并保留服务器原文。极少数真正的服务端故障
+			// （存储写入失败等）也会走此信封——原文照透，可接受偏差。
+			return fail(CodeValidation, ae.Error())
 		default:
 			return fail(CodeServer, ae.Error())
 		}
