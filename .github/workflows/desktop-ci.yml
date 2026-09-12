@@ -87,3 +87,7 @@ jobs:
         working-directory: desktop/frontend
       - run: npx vitest run tests/messages-perf.test.ts
         working-directory: desktop/frontend
+      # Task 14: execute the vitest benchmark files (M2 sessions + M3 streams).
+      # The plain `vitest run` suite excludes *.bench.ts by include-pattern.
+      - run: npx vitest bench --run tests/bench/
+        working-directory: desktop/frontend

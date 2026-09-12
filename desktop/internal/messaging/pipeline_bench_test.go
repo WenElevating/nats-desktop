@@ -10,8 +10,12 @@ package messaging
 
 import (
 	"encoding/base64"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 // benchMsg is the 1KB-payload message reused across iterations. Base64/JSON
@@ -49,6 +53,43 @@ func BenchmarkPipelineThroughput(b *testing.B) {
 	}
 	elapsed := time.Since(start)
 	b.ReportMetric(float64(b.N)/elapsed.Seconds(), "msg/s")
+}
+
+// BenchmarkHeaderFilterPipeline (Task 14) measures the Task 6 receive path
+// with an ACTIVE header filter: session.handle = HeadersMatchFilters +
+// buildMsgOut (base64 + header deep-copy + utf8) + deliver (rate meter, ring,
+// realtime pusher, throttled state notify) — 100,000 receipts per op, pure
+// logic (no server; the NATS callback is invoked directly with a crafted
+// nats.Msg). This is the flood-time per-message cost a filtered session pays,
+// complementing TestHeaderMatchPerformance (filter alone) and
+// BenchmarkPipelineThroughput (pipeline alone, no filter):
+//
+//	go test ./internal/messaging/ -bench BenchmarkHeaderFilterPipeline -benchmem
+func BenchmarkHeaderFilterPipeline(b *testing.B) {
+	s := newSession("bench", "bench.filter.>", nil, PushRealtime, 10000,
+		map[string]string{"Env": "prod", "Svc": "orders"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		func(string, any) {}, // noop emit: pure deliver cost
+	)
+	m := &nats.Msg{
+		Subject: "bench.filter.a",
+		Header:  nats.Header{"Env": {"prod"}, "Svc": {"orders"}, "Ver": {"3"}},
+		Data:    make([]byte, 1024),
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.handle(m)
+	}
+	b.StopTimer()
+	// Every receipt must have cleared the filter and been delivered exactly
+	// once (conservation: received == total + filtered, filtered == 0).
+	if got := s.filtered.Load(); got != 0 {
+		b.Fatalf("filtered = %d, want 0", got)
+	}
+	if got := s.seq.Load(); got != int64(b.N) {
+		b.Fatalf("seq = %d, want %d", got, b.N)
+	}
 }
 
 // TestPipelineThroughputFloor is the CI gate: the pipeline must sustain at
