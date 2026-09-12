@@ -56,6 +56,7 @@ export type {
   TraceHop,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/models.js";
 export {
+  BackupStream,
   BrowseStream,
   CopyConsumer,
   CopyStream,
@@ -69,10 +70,12 @@ export {
   ListConsumers,
   ListStreams,
   PauseConsumer,
+  PickBackupDirectory,
   PreviewNext,
   PurgeStream,
   RemoveStreamMessage,
   ResetConsumer,
+  RestoreBackup,
   ResumeConsumer,
   SealStream,
   UpdateConsumer,

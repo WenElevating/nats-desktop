@@ -9,6 +9,7 @@ import { StreamList } from "./StreamList";
 import { StreamDetail } from "./StreamDetail";
 import { StreamForm, type StreamFormMode } from "./StreamForm";
 import { StreamMsgs } from "./StreamMsgs";
+import { BackupPanel, type BackupDirection } from "./BackupPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -30,6 +31,8 @@ export interface StreamsPageProps {
   /** Override for the create entry (tests/host flows). Defaults to the
    * built-in create dialog (Task 10). */
   onCreate?: () => void;
+  /** Override for the restore entry. Defaults to the built-in restore panel
+   * (Task 13 BackupPanel in restore mode). */
   onRestore?: () => void;
 }
 
@@ -60,9 +63,17 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
   // Task 11: the detail pane's Messages op swaps in the browser panel (the
   // panel replaces the detail view; close returns to it).
   const [msgsOpen, setMsgsOpen] = useState(false);
+  // Task 13: the backup/restore dialog — backup opens from the detail pane's
+  // Backup op (with the selected stream), restore from the toolbar button.
+  const [backup, setBackup] = useState<{ open: boolean; mode: BackupDirection; stream: string }>({
+    open: false,
+    mode: "backup",
+    stream: "",
+  });
 
   const openForm = useCallback((mode: StreamFormMode) => setForm({ open: true, mode }), []);
   const closeForm = useCallback(() => setForm((f) => ({ ...f, open: false })), []);
+  const closeBackup = useCallback(() => setBackup((b) => ({ ...b, open: false })), []);
 
   // Runs an op with the immediate busy marker; confirm dialogs resolve before
   // the binding call, cancellation just clears the spinner.
@@ -155,17 +166,15 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
           >
             {t("streams.create")}
           </Button>
-          {onRestore && (
-            <Button
-              size="sm"
-              variant="outline"
-              data-testid="streams-restore"
-              onClick={onRestore}
-              className="h-8 shrink-0"
-            >
-              {t("streams.restore")}
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="streams-restore"
+            onClick={onRestore ?? (() => setBackup({ open: true, mode: "restore", stream: "" }))}
+            className="h-8 shrink-0"
+          >
+            {t("streams.restore")}
+          </Button>
         </div>
 
         {!connected ? (
@@ -222,6 +231,9 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
               onCopy={() => openForm("copy")}
               onPurge={handlePurge}
               onSeal={handleSeal}
+              onBackup={() =>
+                setBackup({ open: true, mode: "backup", stream: selectedName })
+              }
               onDelete={handleDelete}
             />
           )
@@ -249,6 +261,16 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
           form.mode === "edit" ? await api.update(values) : await api.create(values)
         }
         onDone={closeForm}
+      />
+
+      {/* Backup / restore dialog (Task 13): one panel, two modes; completion
+       * refreshes the page's stream list via api.refresh. */}
+      <BackupPanel
+        open={backup.open}
+        mode={backup.mode}
+        stream={backup.stream}
+        refresh={api.refresh}
+        onClose={closeBackup}
       />
     </div>
   );
