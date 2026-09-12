@@ -21,7 +21,7 @@ export function matchStreams(streams: StreamSummary[], query: string): StreamSum
   return streams.filter(
     (s) =>
       s.name.toLowerCase().includes(q) ||
-      s.subjects.some((sub) => sub.toLowerCase().includes(q)),
+      (s.subjects ?? []).some((sub) => sub.toLowerCase().includes(q)),
   );
 }
 

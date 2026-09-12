@@ -207,7 +207,7 @@ export function StreamList({ streams, rates, selected, onSelect }: StreamListPro
                     )}
                   </span>
                   <span className="truncate text-[var(--fg-muted)]">
-                    {s.subjects.length > 0 ? s.subjects.join(", ") : "—"}
+                    {(s.subjects ?? []).length > 0 ? (s.subjects ?? []).join(", ") : "—"}
                   </span>
                   <span className="text-right tabular-nums">{s.messages}</span>
                   <span data-testid={`stream-rate-${s.name}`} className="text-right tabular-nums">

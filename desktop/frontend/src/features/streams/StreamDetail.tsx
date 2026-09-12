@@ -210,7 +210,7 @@ export function StreamDetail({
       </div>
 
       {/* Mirror / sources */}
-      {(detail.mirror || detail.sources.length > 0) && (
+      {(detail.mirror || (detail.sources ?? []).length > 0) && (
         <div className="flex flex-col gap-1 text-xs">
           <h3 className="text-sm font-medium">{t("streams.detail.sources")}</h3>
           {detail.mirror && (
@@ -223,7 +223,7 @@ export function StreamDetail({
               </span>
             </div>
           )}
-          {detail.sources.map((src) => (
+          {(detail.sources ?? []).map((src) => (
             <div
               key={src.name}
               data-testid="stream-detail-source"
@@ -254,7 +254,7 @@ export function StreamDetail({
               {t("streams.detail.leader")}: {detail.cluster.leader || "—"}
             </span>
             <span className="text-[var(--fg-muted)]">
-              {t("streams.detail.peers")}: {detail.cluster.peers.length}
+              {t("streams.detail.peers")}: {(detail.cluster.peers ?? []).length}
             </span>
             {detail.cluster.leader === "" && (
               <span className="text-[var(--danger-fg)]">{t("streams.leaderMissing")}</span>
