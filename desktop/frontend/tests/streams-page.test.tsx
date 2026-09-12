@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { it, expect, vi, beforeEach, afterEach } from "vitest";
 import { StreamsPage } from "../src/features/streams/StreamsPage";
+import { ConfirmProvider } from "../src/lib/confirm";
 import { GRID_COLS } from "../src/features/streams/StreamList";
 import { ListStreams, GetStreamDetail, GetSettings } from "../src/lib/bindings";
 import type { StreamDetail, StreamSummary } from "../src/lib/bindings";
@@ -174,7 +175,11 @@ it("renders the list (formatted columns) and fills the rate column after the sec
     .mockResolvedValue(
       listOk([summary({ name: "ORDERS", last_seq: 350 })]) as never,
     );
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
 
   // First frame: three streams, rate column shows the "—" placeholder.
@@ -194,7 +199,11 @@ it("renders the list (formatted columns) and fills the rate column after the sec
 });
 
 it("lays out header and virtual rows on one shared grid template", async () => {
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
 
   // Review fix: the row must be a real grid container ("grid" class) and the
@@ -215,7 +224,11 @@ it("lays out header and virtual rows on one shared grid template", async () => {
 });
 
 it("marks the KV internal kind and unhealthy replicas", async () => {
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
 
   expect(screen.getByTestId("stream-kind-KV_BUCKETS").textContent).toBe("KV");
@@ -233,7 +246,11 @@ it("replaces the table with the unavailable guidance panel (never an empty table
     streams: [],
     unavailable_reason: "no_responders",
   } as never);
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
 
   const panel = screen.getByTestId("streams-unavailable");
@@ -246,7 +263,11 @@ it("replaces the table with the unavailable guidance panel (never an empty table
 });
 
 it("filters streams by name or subject substring", async () => {
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
 
   const input = screen.getByLabelText("Search streams");
@@ -267,7 +288,11 @@ it("polls the selected stream detail and switches the rate window", async () => 
   vi.mocked(GetStreamDetail)
     .mockResolvedValueOnce(detailFixture({ last_seq: 1000 }) as never)
     .mockResolvedValue(detailFixture({ last_seq: 1500 }) as never);
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
 
   // Right pane shows the empty-state guidance before a selection.
@@ -300,7 +325,11 @@ it("polls the selected stream detail and switches the rate window", async () => 
 
 it("shows the connect banner and stops polling while disconnected", async () => {
   connState.state = "disconnected";
-  const off = render(<StreamsPage />);
+  const off = render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush(20_000);
 
   expect(screen.getByTestId("streams-not-connected")).toBeTruthy();
@@ -309,12 +338,20 @@ it("shows the connect banner and stops polling while disconnected", async () => 
 
   // Transition: a live page stops polling (and clears) when the connection drops.
   connState.state = "connected";
-  const live = render(<StreamsPage />);
+  const live = render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
   expect(ListStreams).toHaveBeenCalledTimes(1);
   expect(rows()).toHaveLength(3);
   connState.state = "disconnected";
-  live.rerender(<StreamsPage />);
+  live.rerender(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush(20_000);
   expect(ListStreams).toHaveBeenCalledTimes(1);
   expect(screen.getByTestId("streams-not-connected")).toBeTruthy();
@@ -322,7 +359,11 @@ it("shows the connect banner and stops polling while disconnected", async () => 
 });
 
 it("pauses polling while the document is hidden and resumes when visible", async () => {
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
   expect(ListStreams).toHaveBeenCalledTimes(1);
 
@@ -349,7 +390,11 @@ it("renders only the virtual window of a 10k-stream list", async () => {
       ),
     ) as never,
   );
-  render(<StreamsPage />);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
   await flush();
 
   expect(rows().length).toBeGreaterThan(0);

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
 import { formatBytes } from "../messages/schema";
 import { formatRate } from "./rates";
@@ -32,6 +33,10 @@ export interface StreamDetailProps {
   onSeal?: () => void;
   onMessages?: () => void;
   onBackup?: () => void;
+  /** Op key ("edit" | "copy" | …) whose button shows a spinner and disables —
+   * set synchronously on click so feedback is immediate (Global Constraint
+   * 9/13: optimistic loading ≤100ms). */
+  busy?: string | null;
 }
 
 /** ms epoch → local date-time; 0 → "—" (never a bogus 1970 date). */
@@ -71,6 +76,7 @@ export function StreamDetail({
   onSeal,
   onMessages,
   onBackup,
+  busy,
 }: StreamDetailProps) {
   const { t } = useTranslation();
   const [windowMs, setWindowMs] = useState<number>(WINDOWS[0].ms);
@@ -132,8 +138,12 @@ export function StreamDetail({
                   size="sm"
                   variant="outline"
                   data-testid={`stream-op-${key}`}
+                  disabled={busy === key}
                   onClick={fn}
                 >
+                  {busy === key && (
+                    <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                  )}
                   {t(`streams.op.${key}`)}
                 </Button>
               ),

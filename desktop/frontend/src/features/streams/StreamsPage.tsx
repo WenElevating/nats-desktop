@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
+import { useConfirm } from "../../lib/confirm";
 import type { StreamSummary } from "../../lib/bindings";
 import { useStreams } from "./useStreams";
 import { StreamList } from "./StreamList";
 import { StreamDetail } from "./StreamDetail";
+import { StreamForm, type StreamFormMode } from "./StreamForm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -24,7 +26,8 @@ export function matchStreams(streams: StreamSummary[], query: string): StreamSum
 const KNOWN_REASONS = ["no_responders", "timeout", "server"] as const;
 
 export interface StreamsPageProps {
-  // Button slots (Task 10/11/13 inject the create/restore flows).
+  /** Override for the create entry (tests/host flows). Defaults to the
+   * built-in create dialog (Task 10). */
   onCreate?: () => void;
   onRestore?: () => void;
 }
@@ -36,12 +39,78 @@ export interface StreamsPageProps {
  * (unavailable_reason, spec §6.6 Global Constraint) a guidance panel with the
  * domain / api_prefix troubleshooting steps replaces the table — never an
  * empty grid. Disconnected shows a connect banner instead.
+ *
+ * Since Task 10 the page owns the create/edit/copy dialog and the tiered
+ * danger ops: purge/seal go through confirmL1, delete through
+ * confirmNameMatch (Global Constraint 4 / AC-010); every op button shows its
+ * spinner immediately via the `busy` key.
  */
 export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
   const { t } = useTranslation();
   const conn = useConnState();
   const api = useStreams();
+  const { confirmL1, confirmNameMatch } = useConfirm();
   const [query, setQuery] = useState("");
+  const [form, setForm] = useState<{ open: boolean; mode: StreamFormMode }>({
+    open: false,
+    mode: "create",
+  });
+  const [busyOp, setBusyOp] = useState<string | null>(null);
+
+  const openForm = useCallback((mode: StreamFormMode) => setForm({ open: true, mode }), []);
+  const closeForm = useCallback(() => setForm((f) => ({ ...f, open: false })), []);
+
+  // Runs an op with the immediate busy marker; confirm dialogs resolve before
+  // the binding call, cancellation just clears the spinner.
+  const runOp = useCallback(async (key: string, fn: () => Promise<unknown>) => {
+    setBusyOp(key);
+    try {
+      await fn();
+    } finally {
+      setBusyOp(null);
+    }
+  }, []);
+
+  const selectedName = api.detail?.summary.name ?? "";
+
+  const handlePurge = useCallback(
+    () =>
+      runOp("purge", async () => {
+        if (!selectedName) return;
+        const ok = await confirmL1({
+          titleKey: "streams.confirm.purgeTitle",
+          bodyKey: "streams.confirm.purgeBody",
+          data: { name: selectedName },
+        });
+        if (ok) await api.purge(selectedName, 0, 0, "");
+      }),
+    [runOp, selectedName, confirmL1, api],
+  );
+
+  const handleSeal = useCallback(
+    () =>
+      runOp("seal", async () => {
+        if (!selectedName) return;
+        const ok = await confirmL1({
+          titleKey: "streams.confirm.sealTitle",
+          bodyKey: "streams.confirm.sealBody",
+          data: { name: selectedName },
+        });
+        if (ok) await api.seal(selectedName);
+      }),
+    [runOp, selectedName, confirmL1, api],
+  );
+
+  const handleDelete = useCallback(
+    () =>
+      runOp("delete", async () => {
+        if (!selectedName) return;
+        // Level-2: always shown, confirm only on a character-exact name.
+        const ok = await confirmNameMatch(selectedName);
+        if (ok) await api.remove(selectedName);
+      }),
+    [runOp, selectedName, confirmNameMatch, api],
+  );
 
   const filtered = useMemo(() => matchStreams(api.list, query), [api.list, query]);
   const connected = conn.state === "connected";
@@ -74,11 +143,14 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
           >
             <RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />
           </Button>
-          {onCreate && (
-            <Button size="sm" data-testid="streams-create" onClick={onCreate} className="h-8 shrink-0">
-              {t("streams.create")}
-            </Button>
-          )}
+          <Button
+            size="sm"
+            data-testid="streams-create"
+            onClick={onCreate ?? (() => openForm("create"))}
+            className="h-8 shrink-0"
+          >
+            {t("streams.create")}
+          </Button>
           {onRestore && (
             <Button
               size="sm"
@@ -129,6 +201,12 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
             loading={api.detailLoading}
             rate={api.rate}
             series={api.series}
+            busy={busyOp}
+            onEdit={() => openForm("edit")}
+            onCopy={() => openForm("copy")}
+            onPurge={handlePurge}
+            onSeal={handleSeal}
+            onDelete={handleDelete}
           />
         ) : (
           <div
@@ -142,6 +220,19 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
           </div>
         )}
       </section>
+
+      {/* Create / edit / copy dialog (Task 10). Copy submits through
+       * CreateStream so the operator's tweaks travel with the new stream;
+       * edit submits through UpdateStream. */}
+      <StreamForm
+        open={form.open}
+        mode={form.mode}
+        initial={form.mode === "create" ? null : api.detail?.form ?? null}
+        onSubmit={async (values) =>
+          form.mode === "edit" ? await api.update(values) : await api.create(values)
+        }
+        onDone={closeForm}
+      />
     </div>
   );
 }
