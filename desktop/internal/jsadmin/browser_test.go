@@ -286,9 +286,11 @@ func startOversizeJSServer(t *testing.T) string {
 	return srv.ClientURL()
 }
 
-// TestBrowseOversizePayloadTruncated: browse rows carry only the first 64KB
-// (Truncated=true, full PayloadSize); GetStreamMessage returns the complete
-// payload and never sets Truncated.
+// TestBrowseOversizePayloadTruncated: only messages over 1MB (spec §6.6)
+// get truncated browse rows — first 64KB prefix (Truncated=true, full
+// PayloadSize); a mid-band (64KB, 1MB] message ships its full payload with
+// Truncated=false. GetStreamMessage returns the complete payload and never
+// sets Truncated.
 func TestBrowseOversizePayloadTruncated(t *testing.T) {
 	svc := newAdmin(t, startOversizeJSServer(t))
 	if res := svc.CreateStream(StreamForm{Name: "BIGROW", Subjects: []string{"bigrow.>"}, Storage: "file", Retention: "limits", Replicas: 1}); !res.Ok() {
@@ -332,5 +334,32 @@ func TestBrowseOversizePayloadTruncated(t *testing.T) {
 	got, err := base64.StdEncoding.DecodeString(g.Msg.PayloadB64)
 	if err != nil || !bytes.Equal(got, full) {
 		t.Fatalf("get must return the full payload (err=%v, %d bytes)", err, len(got))
+	}
+
+	// 中间档 (64KB, 1MB]：500KB 消息必须整包内联，Truncated=false
+	mid := make([]byte, 500*1024)
+	for i := range mid {
+		mid[i] = byte(i % 253)
+	}
+	if err := nc.Publish("bigrow.a", mid); err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	pm := svc.BrowseStream(BrowserPageRequest{Stream: "BIGROW", StartSeq: 2, Count: 20})
+	if !pm.Ok() || len(pm.Messages) != 1 || pm.Messages[0].Seq != 2 {
+		t.Fatalf("mid page: %+v", pm)
+	}
+	mrow := pm.Messages[0]
+	if mrow.Truncated || mrow.PayloadSize != len(mid) {
+		t.Fatalf("mid-band row must ship the full payload: truncated=%v size=%d", mrow.Truncated, mrow.PayloadSize)
+	}
+	mraw, err := base64.StdEncoding.DecodeString(mrow.PayloadB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(mraw, mid) {
+		t.Fatalf("mid-band payload_b64 must decode byte-exact to the full %d-byte payload (got %d bytes)", len(mid), len(mraw))
 	}
 }

@@ -146,10 +146,11 @@ type BrowserMsg struct {
 	PayloadSize int                 `json:"payload_size"`
 	TimestampMs int64               `json:"timestamp_ms"`
 	IsUtf8      bool                `json:"is_utf8"`
-	// Truncated=true 时 PayloadB64 仅携带前 64KB（行级预览上限），
-	// PayloadSize 仍为完整大小；完整内容经 GetStreamMessage / 下载获取。
-	// 防止大消息页（如 50×2MB）把单页载荷推到百 MB 级（§6.6「仅展示
-	// 元数据与十六进制预览」的 wire 半边）。
+	// 仅 >1MB 的消息触发截断（spec §6.6）：Truncated=true 时 PayloadB64
+	// 只携带前 64KB 前缀（行级预览上限），PayloadSize 仍为完整大小；完整
+	// 内容经 GetStreamMessage / 下载获取。≤1MB 的消息整包内联。防止大
+	// 消息页（如 50×2MB）把单页载荷推到百 MB 级（§6.6「仅展示元数据与
+	// 十六进制预览」的 wire 半边）。
 	Truncated bool `json:"truncated"`
 }
 

@@ -14,10 +14,16 @@ import (
 // forged IPC call cannot ask for an unbounded fetch.
 func browsePageSizeAllowed(n int) bool { return n == 20 || n == 50 || n == 100 || n == 200 }
 
-// browsePayloadPreviewLimit caps the per-row payload carried by a browse
-// page; full content of oversized messages comes via GetStreamMessage
-// (single message) or download (BrowserMsg.Truncated contract).
+// browsePayloadPreviewLimit is the per-row payload PREFIX size for messages
+// that get truncated (bounds page weight: 50×2MB page → 50×64KB prefix);
+// full content of oversized messages comes via GetStreamMessage (single
+// message) or download (BrowserMsg.Truncated contract).
 const browsePayloadPreviewLimit = 64 * 1024
+
+// browsePayloadTruncateOver is the truncation TRIGGER (spec §6.6): only
+// messages strictly over 1MB get preview+download treatment in browse rows;
+// messages ≤1MB ship their full payload inline.
+const browsePayloadTruncateOver = 1024 * 1024
 
 // BrowseStream returns one stateless page of a stream's messages. Page state
 // lives entirely in the request (StartSeq = first stream sequence to return,
@@ -81,7 +87,7 @@ func (s *JetAdminService) BrowseStream(req BrowserPageRequest) BrowserPageResult
 			continue
 		}
 		msg := encodeFromHeader(m.Subject(), m.Headers(), m.Data(), meta.Sequence.Stream, meta.Timestamp)
-		if len(m.Data()) > browsePayloadPreviewLimit { // 行载荷截断（wire 半边，见 BrowserMsg.Truncated 注释）
+		if len(m.Data()) > browsePayloadTruncateOver { // 仅 >1MB 触发截断（§6.6）；64KB 仅为前缀上限
 			msg.Truncated = true
 			msg.PayloadB64 = base64.StdEncoding.EncodeToString(m.Data()[:browsePayloadPreviewLimit])
 		}
