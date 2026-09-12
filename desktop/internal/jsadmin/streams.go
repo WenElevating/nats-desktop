@@ -156,7 +156,8 @@ func (s *JetAdminService) CopyStream(src, newName string) CallResult {
 	cfg.Name = newName // Created 等时间戳字段由服务器在创建时设置（api.StreamConfig 无此字段，无需清理）
 	// 服务器无条件拒绝与现有流 subjects 重叠的新流（10065），因此带 subjects
 	// 的源流按原配置直接复制必然失败——改为镜像拷贝：subjects/Sources 清空、
-	// Mirror 指向源流，配置（存储/保留/限额）与数据随镜像复制。镜像/来源型
+	// Mirror 指向源流，配置（存储/保留/限额）与数据随镜像复制。副本镜像依赖
+	// 源流存续：删除源流后镜像停止跟踪，但已复制的数据仍保留。镜像/来源型
 	// 源流本身不声明 subjects，无重叠问题，按原配置直接复制。
 	if len(cfg.Subjects) > 0 {
 		cfg.Mirror = &api.StreamSource{Name: src}

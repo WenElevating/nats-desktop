@@ -110,6 +110,27 @@ func waitListMessages(t *testing.T, svc *JetAdminService, name string, want uint
 	}
 }
 
+// waitDetailMessages polls GetStreamDetail until the named stream reports want
+// messages (2s bound, same rationale as waitListMessages). Needed after
+// CopyStream: the call returns once the mirror stream exists, but the mirror
+// replicates the source data asynchronously — asserting immediately would let
+// an empty-copy regression pass. (STREAM INFO counts are synchronous; the wait
+// here is for mirror catch-up, not counter flush.)
+func waitDetailMessages(t *testing.T, svc *JetAdminService, name string, want uint64) StreamDetail {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		d := svc.GetStreamDetail(name)
+		if d.Ok() && d.Summary.Messages == want {
+			return d
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stream %s detail never showed %d messages: %+v", name, want, d)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestStreamLifecycle(t *testing.T) {
 	svc := newAdmin(t, testutil.StartJSServer(t))
 	form := StreamForm{Name: "ORDERS", Subjects: []string{"orders.>"}, Storage: "file", Retention: "limits", Replicas: 1}
@@ -139,9 +160,16 @@ func TestStreamLifecycle(t *testing.T) {
 	if !detail.Ok() || detail.Form.Description != "edited" || detail.Form.MaxMsgs != 100 {
 		t.Fatalf("detail after update: %+v", detail.Form)
 	}
-	// 复制
+	// 复制（subjects 重叠 → 服务器按镜像实现；源端 3 条已先行发布，镜像追赶
+	// 当前源数据是确定性的）
 	if res := svc.CopyStream("ORDERS", "ORDERS_COPY"); !res.Ok() {
 		t.Fatalf("copy: %+v", res)
+	}
+	// 副本必须呈 mirror 且复制到源端 3 条数据（镜像异步追赶，轮询等待；
+	// 空副本回归在此被拦截）
+	copyDetail := waitDetailMessages(t, svc, "ORDERS_COPY", 3)
+	if !copyDetail.Summary.IsMirror {
+		t.Fatalf("copy must render as mirror: %+v", copyDetail.Summary)
 	}
 	// purge（带计数）
 	p := svc.PurgeStream("ORDERS", 0, 0, "")
@@ -226,9 +254,16 @@ func TestStreamLifecycleLocalServer(t *testing.T) {
 	if !detail.Ok() || detail.Form.Description != "edited" || detail.Form.MaxMsgs != 100 {
 		t.Fatalf("detail after update: %+v", detail.Form)
 	}
-	// 复制
+	// 复制（subjects 重叠 → 服务器按镜像实现；源端 3 条已先行发布，镜像追赶
+	// 当前源数据是确定性的）
 	if res := svc.CopyStream(name, copyName); !res.Ok() {
 		t.Fatalf("copy: %+v", res)
+	}
+	// 副本必须呈 mirror 且复制到源端 3 条数据（镜像异步追赶，轮询等待；
+	// 空副本回归在此被拦截）
+	copyDetail := waitDetailMessages(t, svc, copyName, 3)
+	if !copyDetail.Summary.IsMirror {
+		t.Fatalf("copy must render as mirror: %+v", copyDetail.Summary)
 	}
 	// purge（带计数）
 	p := svc.PurgeStream(name, 0, 0, "")
