@@ -106,7 +106,10 @@ export function ConsumersPage() {
     () =>
       runOp("reset", async () => {
         if (!stream || !selectedName) return;
-        const seq = Number(resetSeq.trim()) || 0;
+        // uint64 binding: non-numeric / negative input clamps to 0 (= reset to
+        // the ack floor) instead of a cryptic transport error.
+        const n = Number(resetSeq.trim());
+        const seq = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
         const ok = await confirmL1({
           titleKey: "consumers.confirm.resetTitle",
           bodyKey: "consumers.confirm.resetBody",

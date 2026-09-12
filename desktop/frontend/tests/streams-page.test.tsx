@@ -5,6 +5,7 @@ import { ConfirmProvider } from "../src/lib/confirm";
 import { GRID_COLS } from "../src/features/streams/StreamList";
 import { ListStreams, GetStreamDetail, GetSettings } from "../src/lib/bindings";
 import type { StreamDetail, StreamSummary } from "../src/lib/bindings";
+import { toast } from "sonner";
 
 // Scenario assertions match user-visible (interpolated) English text, so this
 // file uses the real i18n module (en resources, synchronous init) like the
@@ -321,6 +322,42 @@ it("polls the selected stream detail and switches the rate window", async () => 
   fireEvent.click(screen.getByTestId("stream-window-15m"));
   expect(screen.getByTestId("stream-window-15m").getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByTestId("stream-window-5m").getAttribute("aria-pressed")).toBe("false");
+});
+
+it("detail not_found drops the stale selection once and refreshes — no per-tick toast", async () => {
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByTestId("stream-row-ORDERS"));
+  await flush();
+  expect(screen.getByTestId("stream-detail")).toBeTruthy();
+
+  // The stream is deleted externally: every subsequent detail answer is
+  // not_found (§6.6, mirroring the useConsumers stale-selection semantics).
+  vi.mocked(GetStreamDetail).mockResolvedValue({
+    error_code: "not_found",
+    error: "stream not found",
+  } as never);
+  vi.mocked(ListStreams).mockClear();
+  vi.mocked(toast.error).mockClear();
+
+  // First poll tick after the external delete: one not_found toast, the stale
+  // selection is dropped (detail pane → empty state) and the list re-fetched
+  // (the tick's own fetchList + the not_found refresh = 2 calls).
+  await flush(5_000);
+  expect(toast.error).toHaveBeenCalledTimes(1);
+  expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("not found"));
+  expect(screen.getByTestId("streams-detail-empty")).toBeTruthy();
+  expect(ListStreams).toHaveBeenCalledTimes(2);
+
+  // Second tick: no new toast, no detail re-fetch — the loop stopped tracking
+  // the vanished stream.
+  await flush(5_000);
+  expect(toast.error).toHaveBeenCalledTimes(1);
+  expect(GetStreamDetail).toHaveBeenCalledTimes(2); // initial + the not_found one
 });
 
 it("shows the connect banner and stops polling while disconnected", async () => {

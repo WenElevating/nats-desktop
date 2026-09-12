@@ -277,7 +277,7 @@ export function BackupPanel({ open, mode, stream, refresh, onClose }: BackupPane
           <Progress
             data-testid="backup-progress"
             value={Math.min(100, (progress.bytesDone / progress.bytesTotal) * 100)}
-            aria-label={t("streams.backup.indeterminate")}
+            aria-label={t("streams.backup.progress")}
           />
         ),
         detail: t("streams.backup.bytes", {

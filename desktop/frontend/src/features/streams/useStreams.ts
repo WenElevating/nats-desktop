@@ -133,7 +133,18 @@ export function useStreams(): StreamsApi {
         const d = await GetStreamDetail(name);
         if (selectedRef.current !== name) return; // selection moved on mid-flight
         if (d?.error_code) {
-          toast.error(t("streams.detailLoadFailed", { error: d.error || d.error_code }));
+          if (d.error_code === "not_found") {
+            // The stream vanished under us (external delete / stale selection):
+            // toast「资源不存在」once, drop the stale selection and refresh the
+            // list — the poll loop then stops fetching detail entirely instead
+            // of 404-toasting every tick (mirrors useConsumers §6.7 semantics).
+            toast.error(t("streams.error.notFound"));
+            selectedRef.current = null;
+            setSelected(null);
+            void fetchList();
+          } else {
+            toast.error(t("streams.detailLoadFailed", { error: d.error || d.error_code }));
+          }
           return;
         }
         const now = Date.now();
@@ -150,7 +161,7 @@ export function useStreams(): StreamsApi {
         setDetailLoading(false);
       }
     },
-    [t],
+    [t, fetchList],
   );
 
   // The poll loop: one cadence drives list + selected detail. Selection is
