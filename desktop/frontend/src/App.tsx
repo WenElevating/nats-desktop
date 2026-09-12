@@ -12,6 +12,7 @@ import { SettingsPage } from "./features/settings/SettingsPage";
 import { ConnectionsPage } from "./features/connections/ConnectionsPage";
 import { Connect, Default, GetSettings, ListContexts, SaveSettings } from "./lib/bindings";
 import type { Settings } from "./lib/bindings";
+import { ConfirmProvider } from "./lib/confirm";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -215,7 +216,10 @@ function AppBody() {
   };
 
   return (
-    <>
+    // ConfirmProvider hosts the global L1/L2 confirm dialogs used by every
+    // destructive action (streams/consumers/KV/objects) — mounted at the app
+    // root alongside the Toaster so both sit above all page content.
+    <ConfirmProvider>
       <Shell
         page={page}
         onNavigate={setPage}
@@ -278,7 +282,7 @@ function AppBody() {
         onSwitchContext={switchContext}
       />
       <Toaster theme={isDark ? "dark" : "light"} position="bottom-right" />
-    </>
+    </ConfirmProvider>
   );
 }
 

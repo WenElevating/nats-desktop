@@ -12,6 +12,7 @@ export interface SettingsPageProps {
 const THEME_OPTIONS = ["light", "dark", "system"] as const;
 const LANGUAGE_OPTIONS = ["en", "zh-CN"] as const;
 const LOG_LEVEL_OPTIONS = ["debug", "info", "warn", "error"] as const;
+const CONFIRM_LEVEL_OPTIONS = ["standard", "relaxed"] as const;
 
 const toNumber = (v: string): number => {
   const n = Number(v);
@@ -129,6 +130,20 @@ export function SettingsPage({ settings, onSave }: SettingsPageProps) {
           >
             {LOG_LEVEL_OPTIONS.map((o) => (
               <option key={o} value={o}>{o}</option>
+            ))}
+          </select>
+        </div>
+        <div className="settings-field">
+          <label htmlFor="settings-confirm-level">{t("settings.confirmLevel.label")}</label>
+          <select
+            id="settings-confirm-level"
+            value={draft.behavior.confirm_level}
+            onChange={(e) => patchBehavior({ confirm_level: e.target.value })}
+          >
+            {CONFIRM_LEVEL_OPTIONS.map((o) => (
+              <option key={o} value={o}>
+                {t(o === "standard" ? "settings.confirmLevel.standard" : "settings.confirmLevel.relaxed")}
+              </option>
             ))}
           </select>
         </div>

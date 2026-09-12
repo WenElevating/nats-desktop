@@ -16,3 +16,14 @@ it("saves picked theme and language", async () => {
   expect(saved.appearance.theme).toBe("dark");
   expect(saved.appearance.language).toBe("zh-CN");
 });
+
+it("renders confirm_level (default standard) and carries the change into SaveSettings", async () => {
+  const onSave = vi.fn().mockResolvedValue(undefined);
+  render(<SettingsPage settings={Default()} onSave={onSave} />);
+  const select = screen.getByLabelText("settings.confirmLevel.label") as HTMLSelectElement;
+  expect(select.value).toBe("standard");
+  fireEvent.change(select, { target: { value: "relaxed" } });
+  fireEvent.click(screen.getByRole("button", { name: "common.save" }));
+  await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
+  expect(onSave.mock.calls[0][0].behavior.confirm_level).toBe("relaxed");
+});
