@@ -263,6 +263,47 @@ func TestConsumerEditImmutableRejected(t *testing.T) {
 	}
 }
 
+// TestConsumerEditRoundTripEchoedForm: 详情回显的 Form 必须能原样喂回
+// UpdateConsumer（编辑往返）。两类消费者的 MaxDeliver 都以 -1（=无限制）存在
+// 服务器：默认 explicit 消费者的服务器默认值即 -1；ack_none 由
+// ConsumerFormToConfig 主动写入 -1（natscli 同款规避）。表单契约是
+// 0=不设置（服务器默认），回显必须归一为 0，否则往返在出网前就被
+// ValidateConsumerForm 的「count limits must be >= 0」拒绝。
+func TestConsumerEditRoundTripEchoedForm(t *testing.T) {
+	svc := seedStream(t, testutil.StartJSServer(t), "CRT", 1)
+
+	// 默认（ack explicit）消费者：服务器对 unlimited 投递回显 -1。
+	if res := svc.CreateConsumer(consumerForm("CRT", "rt_explicit")); !res.Ok() {
+		t.Fatalf("create explicit: %+v", res)
+	}
+	d := svc.GetConsumerDetail("CRT", "rt_explicit")
+	if !d.Ok() {
+		t.Fatalf("detail explicit: %+v", d.CallResult)
+	}
+	if d.Form.MaxDeliver != 0 {
+		t.Fatalf("echoed explicit MaxDeliver must normalize to 0: %+v", d.Form)
+	}
+	if res := svc.UpdateConsumer(d.Form); !res.Ok() {
+		t.Fatalf("update echoed explicit form: %+v", res)
+	}
+
+	// ack-none 消费者：创建时即写入 MaxDeliver=-1。
+	none := consumerForm("CRT", "rt_none")
+	none.AckPolicy = "none"
+	if res := svc.CreateConsumer(none); !res.Ok() {
+		t.Fatalf("create ack-none: %+v", res)
+	}
+	if d = svc.GetConsumerDetail("CRT", "rt_none"); !d.Ok() {
+		t.Fatalf("detail ack-none: %+v", d.CallResult)
+	}
+	if d.Form.MaxDeliver != 0 {
+		t.Fatalf("echoed ack-none MaxDeliver must normalize to 0: %+v", d.Form)
+	}
+	if res := svc.UpdateConsumer(d.Form); !res.Ok() {
+		t.Fatalf("update echoed ack-none form: %+v", res)
+	}
+}
+
 // waitAckFloor polls GetConsumerDetail until the consumer's ack floor reaches
 // want. Ack propagation (async ack replies + server-side floor advance) is not
 // synchronous with m.Ack(), so an immediate read can still see the old floor.

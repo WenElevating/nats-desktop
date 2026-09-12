@@ -115,7 +115,7 @@ func consumerConfigToForm(stream string, cfg api.ConsumerConfig) ConsumerForm {
 		Description:              cfg.Description,
 		AckPolicy:                ackPolicyFromAPI(cfg.AckPolicy),
 		AckWaitSeconds:           int64(cfg.AckWait / time.Second),
-		MaxDeliver:               cfg.MaxDeliver, // -1 = 无限制，与表单 0=不设置同义（往返归一）
+		MaxDeliver:               cfg.MaxDeliver,
 		MaxWaiting:               cfg.MaxWaiting,
 		MaxAckPending:            cfg.MaxAckPending,
 		MaxRequestBatch:          cfg.MaxRequestBatch,
@@ -130,6 +130,13 @@ func consumerConfigToForm(stream string, cfg api.ConsumerConfig) ConsumerForm {
 		MemoryStorage:            cfg.MemoryStorage,
 		InactiveThresholdSeconds: int64(cfg.InactiveThreshold / time.Second),
 		FilterSubjects:           cfg.FilterSubjects,
+	}
+	// MaxDeliver 回显归一：服务器把「无限制」存为 -1（explicit 消费者的默认值，
+	// ack_none 由 ConsumerFormToConfig 主动写入 -1），而表单契约是 0=不设置
+	//（服务器默认）且 ValidateConsumerForm 拒绝负数——-1 原样回显会让编辑
+	// 往返（d.Form → UpdateConsumer）未出网即被拒，故归一为 0。
+	if f.MaxDeliver < 0 {
+		f.MaxDeliver = 0
 	}
 	if len(f.FilterSubjects) == 0 && cfg.FilterSubject != "" {
 		f.FilterSubjects = []string{cfg.FilterSubject}
