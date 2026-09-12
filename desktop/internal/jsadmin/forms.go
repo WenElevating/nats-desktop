@@ -576,8 +576,10 @@ func BuildConsumerSummary(info api.ConsumerInfo) ConsumerSummary {
 	return s
 }
 
-func EncodeBrowserMsg(subject string, rawHeader, data []byte, seq uint64, ts time.Time) BrowserMsg {
-	m := BrowserMsg{
+// browserMsgBase fills the payload/timestamp fields shared by both header
+// decoding branches (wire-block vs nats.Header).
+func browserMsgBase(subject string, data []byte, seq uint64, ts time.Time) BrowserMsg {
+	return BrowserMsg{
 		Seq:         seq,
 		Subject:     subject,
 		PayloadB64:  base64.StdEncoding.EncodeToString(data),
@@ -585,10 +587,26 @@ func EncodeBrowserMsg(subject string, rawHeader, data []byte, seq uint64, ts tim
 		TimestampMs: ts.UnixMilli(),
 		IsUtf8:      utf8.Valid(data),
 	}
+}
+
+func EncodeBrowserMsg(subject string, rawHeader, data []byte, seq uint64, ts time.Time) BrowserMsg {
+	m := browserMsgBase(subject, data, seq, ts)
 	if len(rawHeader) > 0 {
 		if hdr, err := decodeHeaders(rawHeader); err == nil {
 			m.Headers = hdr
 		}
+	}
+	return m
+}
+
+// encodeFromHeader is the nats.Header-direct branch of EncodeBrowserMsg used
+// by the jetstream browse path (Msg.Headers() already carries the parsed
+// map). nats.Header IS map[string][]string, so the conversion is the identity
+// cast — both decode paths feed the same BrowserMsg shape (两条路径测试同一期望).
+func encodeFromHeader(subject string, h nats.Header, data []byte, seq uint64, ts time.Time) BrowserMsg {
+	m := browserMsgBase(subject, data, seq, ts)
+	if len(h) > 0 {
+		m.Headers = map[string][]string(h)
 	}
 	return m
 }

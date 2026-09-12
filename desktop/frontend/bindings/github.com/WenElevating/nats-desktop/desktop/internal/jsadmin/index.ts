@@ -7,8 +7,12 @@ export {
 };
 
 export {
+    BrowserMsg,
+    BrowserPageRequest,
+    BrowserPageResult,
     CallResult,
     ClusterOut,
+    GetMsgResult,
     ListStreamsResult,
     PeerOut,
     PurgeResult,

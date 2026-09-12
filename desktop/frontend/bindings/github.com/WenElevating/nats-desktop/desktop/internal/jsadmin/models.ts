@@ -5,6 +5,160 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
+export class BrowserMsg {
+    "seq": number;
+    "subject": string;
+    "headers": { [_ in string]?: string[] };
+    "payload_b64": string;
+    "payload_size": number;
+    "timestamp_ms": number;
+    "is_utf8": boolean;
+
+    /**
+     * Truncated=true 时 PayloadB64 仅携带前 64KB（行级预览上限），
+     * PayloadSize 仍为完整大小；完整内容经 GetStreamMessage / 下载获取。
+     * 防止大消息页（如 50×2MB）把单页载荷推到百 MB 级（§6.6「仅展示
+     * 元数据与十六进制预览」的 wire 半边）。
+     */
+    "truncated": boolean;
+
+    /** Creates a new BrowserMsg instance. */
+    constructor($$source: Partial<BrowserMsg> = {}) {
+        if (!("seq" in $$source)) {
+            this["seq"] = 0;
+        }
+        if (!("subject" in $$source)) {
+            this["subject"] = "";
+        }
+        if (!("headers" in $$source)) {
+            this["headers"] = {};
+        }
+        if (!("payload_b64" in $$source)) {
+            this["payload_b64"] = "";
+        }
+        if (!("payload_size" in $$source)) {
+            this["payload_size"] = 0;
+        }
+        if (!("timestamp_ms" in $$source)) {
+            this["timestamp_ms"] = 0;
+        }
+        if (!("is_utf8" in $$source)) {
+            this["is_utf8"] = false;
+        }
+        if (!("truncated" in $$source)) {
+            this["truncated"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new BrowserMsg instance from a string or object.
+     */
+    static createFrom($$source: any = {}): BrowserMsg {
+        const $$createField2_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("headers" in $$parsedSource) {
+            $$parsedSource["headers"] = $$createField2_0($$parsedSource["headers"]);
+        }
+        return new BrowserMsg($$parsedSource as Partial<BrowserMsg>);
+    }
+}
+
+export class BrowserPageRequest {
+    "stream": string;
+
+    /**
+     * 页首序列（含）
+     */
+    "start_seq": number;
+
+    /**
+     * 20/50/100/200
+     */
+    "count": number;
+
+    /**
+     * 可选；非空时前端禁用"上一页"
+     */
+    "subject_filter": string;
+
+    /** Creates a new BrowserPageRequest instance. */
+    constructor($$source: Partial<BrowserPageRequest> = {}) {
+        if (!("stream" in $$source)) {
+            this["stream"] = "";
+        }
+        if (!("start_seq" in $$source)) {
+            this["start_seq"] = 0;
+        }
+        if (!("count" in $$source)) {
+            this["count"] = 0;
+        }
+        if (!("subject_filter" in $$source)) {
+            this["subject_filter"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new BrowserPageRequest instance from a string or object.
+     */
+    static createFrom($$source: any = {}): BrowserPageRequest {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new BrowserPageRequest($$parsedSource as Partial<BrowserPageRequest>);
+    }
+}
+
+export class BrowserPageResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "messages": BrowserMsg[];
+
+    /**
+     * 下一页请求起点（最后一条 seq+1；空页 = StartSeq）
+     */
+    "next_start_seq": number;
+    "has_more": boolean;
+
+    /** Creates a new BrowserPageResult instance. */
+    constructor($$source: Partial<BrowserPageResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("messages" in $$source)) {
+            this["messages"] = [];
+        }
+        if (!("next_start_seq" in $$source)) {
+            this["next_start_seq"] = 0;
+        }
+        if (!("has_more" in $$source)) {
+            this["has_more"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new BrowserPageResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): BrowserPageResult {
+        const $$createField2_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("messages" in $$parsedSource) {
+            $$parsedSource["messages"] = $$createField2_0($$parsedSource["messages"]);
+        }
+        return new BrowserPageResult($$parsedSource as Partial<BrowserPageResult>);
+    }
+}
+
 /**
  * CallResult is embedded in every bound-call result; Ok is true iff
  * ErrorCode is empty.
@@ -74,12 +228,49 @@ export class ClusterOut {
      * Creates a new ClusterOut instance from a string or object.
      */
     static createFrom($$source: any = {}): ClusterOut {
-        const $$createField4_0 = $$createType1;
+        const $$createField4_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("peers" in $$parsedSource) {
             $$parsedSource["peers"] = $$createField4_0($$parsedSource["peers"]);
         }
         return new ClusterOut($$parsedSource as Partial<ClusterOut>);
+    }
+}
+
+export class GetMsgResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "msg": BrowserMsg | null;
+
+    /** Creates a new GetMsgResult instance. */
+    constructor($$source: Partial<GetMsgResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("msg" in $$source)) {
+            this["msg"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new GetMsgResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): GetMsgResult {
+        const $$createField2_0 = $$createType6;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("msg" in $$parsedSource) {
+            $$parsedSource["msg"] = $$createField2_0($$parsedSource["msg"]);
+        }
+        return new GetMsgResult($$parsedSource as Partial<GetMsgResult>);
     }
 }
 
@@ -123,7 +314,7 @@ export class ListStreamsResult {
      * Creates a new ListStreamsResult instance from a string or object.
      */
     static createFrom($$source: any = {}): ListStreamsResult {
-        const $$createField2_0 = $$createType3;
+        const $$createField2_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("streams" in $$parsedSource) {
             $$parsedSource["streams"] = $$createField2_0($$parsedSource["streams"]);
@@ -300,12 +491,12 @@ export class StreamDetail {
      * Creates a new StreamDetail instance from a string or object.
      */
     static createFrom($$source: any = {}): StreamDetail {
-        const $$createField2_0 = $$createType2;
-        const $$createField3_0 = $$createType4;
-        const $$createField5_0 = $$createType5;
-        const $$createField6_0 = $$createType7;
-        const $$createField7_0 = $$createType8;
-        const $$createField8_0 = $$createType10;
+        const $$createField2_0 = $$createType7;
+        const $$createField3_0 = $$createType9;
+        const $$createField5_0 = $$createType10;
+        const $$createField6_0 = $$createType12;
+        const $$createField7_0 = $$createType13;
+        const $$createField8_0 = $$createType15;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("summary" in $$parsedSource) {
             $$parsedSource["summary"] = $$createField2_0($$parsedSource["summary"]);
@@ -412,10 +603,10 @@ export class StreamForm {
      * Creates a new StreamForm instance from a string or object.
      */
     static createFrom($$source: any = {}): StreamForm {
-        const $$createField2_0 = $$createType11;
-        const $$createField11_0 = $$createType11;
-        const $$createField12_0 = $$createType13;
-        const $$createField13_0 = $$createType14;
+        const $$createField2_0 = $$createType0;
+        const $$createField11_0 = $$createType0;
+        const $$createField12_0 = $$createType17;
+        const $$createField13_0 = $$createType18;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subjects" in $$parsedSource) {
             $$parsedSource["subjects"] = $$createField2_0($$parsedSource["subjects"]);
@@ -595,7 +786,7 @@ export class StreamSummary {
      * Creates a new StreamSummary instance from a string or object.
      */
     static createFrom($$source: any = {}): StreamSummary {
-        const $$createField3_0 = $$createType11;
+        const $$createField3_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subjects" in $$parsedSource) {
             $$parsedSource["subjects"] = $$createField3_0($$parsedSource["subjects"]);
@@ -605,18 +796,22 @@ export class StreamSummary {
 }
 
 // Private type creation functions
-const $$createType0 = PeerOut.createFrom;
-const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = StreamSummary.createFrom;
+const $$createType0 = $Create.Array($Create.Any);
+const $$createType1 = $Create.Map($Create.Any, $$createType0);
+const $$createType2 = BrowserMsg.createFrom;
 const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = StreamForm.createFrom;
-const $$createType5 = StreamStateOut.createFrom;
-const $$createType6 = SourceInfo.createFrom;
-const $$createType7 = $Create.Nullable($$createType6);
-const $$createType8 = $Create.Array($$createType6);
-const $$createType9 = ClusterOut.createFrom;
-const $$createType10 = $Create.Nullable($$createType9);
-const $$createType11 = $Create.Array($Create.Any);
-const $$createType12 = StreamSourceForm.createFrom;
-const $$createType13 = $Create.Nullable($$createType12);
-const $$createType14 = $Create.Array($$createType12);
+const $$createType4 = PeerOut.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = $Create.Nullable($$createType2);
+const $$createType7 = StreamSummary.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = StreamForm.createFrom;
+const $$createType10 = StreamStateOut.createFrom;
+const $$createType11 = SourceInfo.createFrom;
+const $$createType12 = $Create.Nullable($$createType11);
+const $$createType13 = $Create.Array($$createType11);
+const $$createType14 = ClusterOut.createFrom;
+const $$createType15 = $Create.Nullable($$createType14);
+const $$createType16 = StreamSourceForm.createFrom;
+const $$createType17 = $Create.Nullable($$createType16);
+const $$createType18 = $Create.Array($$createType16);

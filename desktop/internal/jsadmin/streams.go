@@ -26,24 +26,53 @@ func (s *JetAdminService) timeout() time.Duration {
 	return time.Duration(st.Behavior.RequestTimeoutSeconds) * time.Second
 }
 
+// resolveConn validates the active connection and the context's JS
+// domain/API prefix, shared by both handle builders.
+func (s *JetAdminService) resolveConn() (nc *nats.Conn, domain, prefix string, res CallResult) {
+	nc = s.mgr.Conn()
+	if nc == nil {
+		return nil, "", "", fail(CodeNotConnected, "not connected")
+	}
+	domain, prefix, ok := s.mgr.JSParams()
+	if !ok {
+		return nil, "", "", fail(CodeNotConnected, "not connected")
+	}
+	return nc, domain, prefix, CallResult{}
+}
+
 // handles builds the jsm manager handle for the active connection, honouring
 // the context's domain/API prefix. The jetstream handle is only needed by the
 // browser/preview paths, which construct it on demand via jsctx.New; callers
 // here ignore the second return.
 func (s *JetAdminService) handles() (mgr *jsm.Manager, js jetstream.JetStream, res CallResult) {
-	nc := s.mgr.Conn()
-	if nc == nil {
-		return nil, nil, fail(CodeNotConnected, "not connected")
-	}
-	domain, prefix, ok := s.mgr.JSParams()
-	if !ok {
-		return nil, nil, fail(CodeNotConnected, "not connected")
+	nc, domain, prefix, res := s.resolveConn()
+	if !res.Ok() {
+		return nil, nil, res
 	}
 	mgr, err := jsctx.NewManager(nc, domain, prefix, s.timeout())
 	if err != nil {
 		return nil, nil, fail(CodeServer, err.Error())
 	}
 	return mgr, nil, CallResult{}
+}
+
+// handlesWithJet mirrors handles() but also returns the jetstream handle
+// (jsctx.New) the message browser needs. Both builds are client-side only —
+// no network round trips — so callers that ignore js pay nothing.
+func (s *JetAdminService) handlesWithJet() (mgr *jsm.Manager, js jetstream.JetStream, res CallResult) {
+	nc, domain, prefix, res := s.resolveConn()
+	if !res.Ok() {
+		return nil, nil, res
+	}
+	js, err := jsctx.New(nc, domain, prefix)
+	if err != nil {
+		return nil, nil, fail(CodeServer, err.Error())
+	}
+	mgr, err = jsctx.NewManager(nc, domain, prefix, s.timeout())
+	if err != nil {
+		return nil, nil, fail(CodeServer, err.Error())
+	}
+	return mgr, js, CallResult{}
 }
 
 // isNoResponders / isTimeout distinguish the JS-layer unavailability causes

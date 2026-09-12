@@ -17,56 +17,98 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
+/**
+ * BrowseStream returns one stateless page of a stream's messages. Page state
+ * lives entirely in the request (StartSeq = first stream sequence to return,
+ * inclusive; NextStartSeq = last returned seq + 1), so the frontend can deep
+ * link / jump to any position without a server-side cursor. Pages are served
+ * through a throwaway ephemeral pull consumer (DeliverByStartSequence +
+ * AckNone) that is deleted on return; the count+1 fetch over-read only to
+ * compute HasMore — the extra message is never returned (no ack needed, no
+ * side effect).
+ */
+export function BrowseStream(req: $models.BrowserPageRequest): $CancellablePromise<$models.BrowserPageResult> {
+    return $Call.ByID(273316478, req).then(($result: any) => {
+        return $$createType0($result);
+    });
+}
+
 export function CopyStream(src: string, newName: string): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(2039655769, src, newName).then(($result: any) => {
-        return $$createType0($result);
+        return $$createType1($result);
     });
 }
 
 export function CreateStream(form: $models.StreamForm): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(3895247320, form).then(($result: any) => {
-        return $$createType0($result);
+        return $$createType1($result);
     });
 }
 
 export function DeleteStream(name: string): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(2288360423, name).then(($result: any) => {
-        return $$createType0($result);
+        return $$createType1($result);
     });
 }
 
 export function GetStreamDetail(name: string): $CancellablePromise<$models.StreamDetail> {
     return $Call.ByID(3400850361, name).then(($result: any) => {
-        return $$createType1($result);
+        return $$createType2($result);
+    });
+}
+
+/**
+ * GetStreamMessage returns one message with its FULL payload (never
+ * truncated — the 64KB preview cap is browse-row-only). Reads go through
+ * jsm's direct stream message GET, so the path works on mirror/source
+ * streams too and 404s on a deleted/never-existing sequence.
+ */
+export function GetStreamMessage(stream: string, seq: number): $CancellablePromise<$models.GetMsgResult> {
+    return $Call.ByID(633748527, stream, seq).then(($result: any) => {
+        return $$createType3($result);
     });
 }
 
 export function ListStreams(): $CancellablePromise<$models.ListStreamsResult> {
     return $Call.ByID(1500379901).then(($result: any) => {
-        return $$createType2($result);
+        return $$createType4($result);
     });
 }
 
 export function PurgeStream(name: string, keep: number, upToSeq: number, subject: string): $CancellablePromise<$models.PurgeResult> {
     return $Call.ByID(321277507, name, keep, upToSeq, subject).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType5($result);
+    });
+}
+
+/**
+ * RemoveStreamMessage deletes one message from a stream (safe erase —
+ * noErase=false, data overwritten). Binds as "RemoveStreamMessage" because
+ * jsm.Manager already exposes a same-named method this service would
+ * otherwise collide with at the binding layer.
+ */
+export function RemoveStreamMessage(stream: string, seq: number): $CancellablePromise<$models.CallResult> {
+    return $Call.ByID(478388371, stream, seq).then(($result: any) => {
+        return $$createType1($result);
     });
 }
 
 export function SealStream(name: string): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(475763909, name).then(($result: any) => {
-        return $$createType0($result);
+        return $$createType1($result);
     });
 }
 
 export function UpdateStream(form: $models.StreamForm): $CancellablePromise<$models.CallResult> {
     return $Call.ByID(2714303341, form).then(($result: any) => {
-        return $$createType0($result);
+        return $$createType1($result);
     });
 }
 
 // Private type creation functions
-const $$createType0 = $models.CallResult.createFrom;
-const $$createType1 = $models.StreamDetail.createFrom;
-const $$createType2 = $models.ListStreamsResult.createFrom;
-const $$createType3 = $models.PurgeResult.createFrom;
+const $$createType0 = $models.BrowserPageResult.createFrom;
+const $$createType1 = $models.CallResult.createFrom;
+const $$createType2 = $models.StreamDetail.createFrom;
+const $$createType3 = $models.GetMsgResult.createFrom;
+const $$createType4 = $models.ListStreamsResult.createFrom;
+const $$createType5 = $models.PurgeResult.createFrom;
