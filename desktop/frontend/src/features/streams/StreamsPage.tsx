@@ -8,6 +8,7 @@ import { useStreams } from "./useStreams";
 import { StreamList } from "./StreamList";
 import { StreamDetail } from "./StreamDetail";
 import { StreamForm, type StreamFormMode } from "./StreamForm";
+import { StreamMsgs } from "./StreamMsgs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -56,6 +57,9 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
     mode: "create",
   });
   const [busyOp, setBusyOp] = useState<string | null>(null);
+  // Task 11: the detail pane's Messages op swaps in the browser panel (the
+  // panel replaces the detail view; close returns to it).
+  const [msgsOpen, setMsgsOpen] = useState(false);
 
   const openForm = useCallback((mode: StreamFormMode) => setForm({ open: true, mode }), []);
   const closeForm = useCallback(() => setForm((f) => ({ ...f, open: false })), []);
@@ -193,21 +197,34 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
         )}
       </aside>
 
-      {/* Right pane: detail or empty-state guidance */}
+      {/* Right pane: message browser, detail, or empty-state guidance */}
       <section className="flex min-w-0 flex-1 flex-col">
         {api.detail ? (
-          <StreamDetail
-            detail={api.detail}
-            loading={api.detailLoading}
-            rate={api.rate}
-            series={api.series}
-            busy={busyOp}
-            onEdit={() => openForm("edit")}
-            onCopy={() => openForm("copy")}
-            onPurge={handlePurge}
-            onSeal={handleSeal}
-            onDelete={handleDelete}
-          />
+          msgsOpen ? (
+            <StreamMsgs
+              key={api.detail.summary.name}
+              stream={api.detail.summary.name}
+              summary={{
+                firstSeq: api.detail.summary.first_seq,
+                lastSeq: api.detail.summary.last_seq,
+              }}
+              onClose={() => setMsgsOpen(false)}
+            />
+          ) : (
+            <StreamDetail
+              detail={api.detail}
+              loading={api.detailLoading}
+              rate={api.rate}
+              series={api.series}
+              busy={busyOp}
+              onMessages={() => setMsgsOpen(true)}
+              onEdit={() => openForm("edit")}
+              onCopy={() => openForm("copy")}
+              onPurge={handlePurge}
+              onSeal={handleSeal}
+              onDelete={handleDelete}
+            />
+          )
         ) : (
           <div
             data-testid="streams-detail-empty"

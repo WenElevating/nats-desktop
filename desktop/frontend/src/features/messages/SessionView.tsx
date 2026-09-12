@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "../../app/i18n";
 import { PushMode, type SessionState } from "../../lib/bindings";
 import { bytesToHex, fromBase64, fromBase64Bytes } from "../../lib/base64";
 import { formatBytes } from "./schema";
+import { PayloadView } from "../../lib/payload";
 import type { MsgOut } from "./useSessions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -83,40 +84,14 @@ function rowPreview(m: MsgOut): { binary: boolean; text: string } {
 
 /**
  * Detail dialog body (spec §6.4): metadata, the headers table, and the full
- * payload — JSON pretty-printed when UTF-8 and parseable, plain text
- * otherwise; binary payloads get a hex/text toggle plus a Blob download.
- * Keyed by the message so the hex toggle resets per selection.
+ * payload via the shared PayloadView (mono-font text / hex-text toggle +
+ * Blob download for binary). Keyed by the message so view state resets per
+ * selection.
  */
 function MessageDetail({ msg }: { msg: MsgOut }) {
   const { t } = useTranslation();
-  const [hexView, setHexView] = useState(true);
 
   const headerEntries = Object.entries(msg.headers ?? {});
-
-  const payload = useMemo(() => {
-    if (!msg.is_utf8) {
-      return { binary: true, hex: bytesToHex(fromBase64Bytes(msg.payload_b64)) };
-    }
-    const text = fromBase64(msg.payload_b64);
-    try {
-      return { binary: false, text: JSON.stringify(JSON.parse(text), null, 2) };
-    } catch {
-      return { binary: false, text };
-    }
-  }, [msg]);
-
-  /** Binary export: raw bytes as a Blob download (never the base64 form). */
-  const download = () => {
-    const bytes = fromBase64Bytes(msg.payload_b64);
-    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `session-${msg.session_id}-msg-${msg.seq}.bin`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -152,46 +127,13 @@ function MessageDetail({ msg }: { msg: MsgOut }) {
 
       <div className="flex flex-col gap-1">
         <h4 className="text-sm font-medium">{t("messages.payload")}</h4>
-        {payload.binary ? (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant={hexView ? "default" : "outline"}
-                aria-pressed={hexView}
-                onClick={() => setHexView(true)}
-              >
-                {t("messages.sessions.hexView")}
-              </Button>
-              <Button
-                size="sm"
-                variant={hexView ? "outline" : "default"}
-                aria-pressed={!hexView}
-                onClick={() => setHexView(false)}
-              >
-                {t("messages.sessions.textView")}
-              </Button>
-              <Button size="sm" variant="outline" className="ml-auto" onClick={download}>
-                {t("messages.sessions.download")}
-              </Button>
-            </div>
-            <pre
-              data-testid="detail-payload"
-              className="max-h-64 overflow-auto rounded-md border border-border bg-panel p-2 font-mono text-xs break-all whitespace-pre-wrap"
-            >
-              {hexView
-                ? payload.hex
-                : fromBase64(msg.payload_b64)}
-            </pre>
-          </div>
-        ) : (
-          <pre
-            data-testid="detail-payload"
-            className="max-h-64 overflow-auto rounded-md border border-border bg-panel p-2 font-mono text-xs break-all whitespace-pre-wrap"
-          >
-            {payload.text}
-          </pre>
-        )}
+        <PayloadView
+          b64={msg.payload_b64}
+          isUtf8={msg.is_utf8}
+          downloadName={`session-${msg.session_id}-msg-${msg.seq}.bin`}
+          toggle
+          testId="detail-payload"
+        />
       </div>
     </div>
   );

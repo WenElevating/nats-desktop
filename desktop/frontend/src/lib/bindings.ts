@@ -56,18 +56,25 @@ export type {
   TraceHop,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/models.js";
 export {
+  BrowseStream,
   CopyStream,
   CreateStream,
   DeleteStream,
   GetStreamDetail,
+  GetStreamMessage,
   ListStreams,
   PurgeStream,
+  RemoveStreamMessage,
   SealStream,
   UpdateStream,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/jsadmin/jetadminservice.js";
 export type {
+  BrowserMsg,
+  BrowserPageRequest,
+  BrowserPageResult,
   CallResult,
   ClusterOut,
+  GetMsgResult,
   ListStreamsResult,
   PurgeResult,
   SourceInfo,
