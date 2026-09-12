@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { it, expect, vi, beforeEach, afterEach } from "vitest";
 import { StreamsPage } from "../src/features/streams/StreamsPage";
+import { GRID_COLS } from "../src/features/streams/StreamList";
 import { ListStreams, GetStreamDetail, GetSettings } from "../src/lib/bindings";
 import type { StreamDetail, StreamSummary } from "../src/lib/bindings";
 
@@ -190,6 +191,27 @@ it("renders the list (formatted columns) and fills the rate column after the sec
   expect(screen.getByTestId("stream-rate-ORDERS").textContent).toContain(
     "50 msg/s",
   );
+});
+
+it("lays out header and virtual rows on one shared grid template", async () => {
+  render(<StreamsPage />);
+  await flush();
+
+  // Review fix: the row must be a real grid container ("grid" class) and the
+  // header row + virtual rows must reference the SAME column template
+  // constant, so the two geometries can never drift. jsdom cannot resolve
+  // Tailwind utilities to computed styles, so this is asserted at the
+  // class/constant level. Also: no gap utility on the row — track-gap pixels
+  // would desync it from the gap-free header.
+  const row = screen.getByTestId("stream-row-ORDERS");
+  expect(row.classList.contains("grid")).toBe(true);
+  const header = document.querySelector(
+    '[data-testid="streams-table-header"]',
+  ) as HTMLElement | null;
+  expect(header).toBeTruthy();
+  expect(header?.className).toContain(GRID_COLS);
+  expect(row.className).toContain(GRID_COLS);
+  expect(row.className).not.toMatch(/(^|\s)gap-\S/);
 });
 
 it("marks the KV internal kind and unhealthy replicas", async () => {
