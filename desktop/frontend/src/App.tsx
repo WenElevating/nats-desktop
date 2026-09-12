@@ -45,15 +45,16 @@ export function useThemeController(mode: ThemeMode): boolean {
   return dark;
 }
 
-// Messages and Streams are code-split: their chunks load on first navigation,
-// keeping the startup bundle small (M1 chunk-size note).
+// Messages, Streams and Consumers are code-split: their chunks load on first
+// navigation, keeping the startup bundle small (M1 chunk-size note).
 const MessagesPage = lazy(() => import("./features/messages/MessagesPage"));
 const StreamsPage = lazy(() => import("./features/streams/StreamsPage"));
+const ConsumersPage = lazy(() => import("./features/consumers/ConsumersPage"));
 
 /**
- * Placeholder for the pages landing in M4–M5 (Dashboard, Consumers, KV,
- * Objects, Monitoring). Only rendered while connected; the Shell swaps in its
- * own guidance state otherwise.
+ * Placeholder for the pages landing in M4–M5 (Dashboard, KV, Objects,
+ * Monitoring). Only rendered while connected; the Shell swaps in its own
+ * guidance state otherwise.
  */
 function PagePlaceholder({ page }: { page: PageId }) {
   const { t } = useTranslation();
@@ -271,6 +272,10 @@ function AppBody() {
         ) : page === "streams" ? (
           <Suspense fallback={<PageSkeleton />}>
             <StreamsPage />
+          </Suspense>
+        ) : page === "consumers" ? (
+          <Suspense fallback={<PageSkeleton />}>
+            <ConsumersPage />
           </Suspense>
         ) : (
           <PagePlaceholder page={page} />
