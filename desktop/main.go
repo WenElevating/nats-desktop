@@ -8,6 +8,7 @@ import (
 
 	"github.com/WenElevating/nats-desktop/desktop/internal/appdir"
 	"github.com/WenElevating/nats-desktop/desktop/internal/connections"
+	"github.com/WenElevating/nats-desktop/desktop/internal/jsadmin"
 	"github.com/WenElevating/nats-desktop/desktop/internal/logging"
 	"github.com/WenElevating/nats-desktop/desktop/internal/messaging"
 	"github.com/WenElevating/nats-desktop/desktop/internal/settings"
@@ -89,6 +90,11 @@ func main() {
 	manager := connections.NewManager(reg, logger, emit)
 	msgSvc = messaging.NewMessagingService(manager, logger, emit, settingsPath)
 
+	// JetStream administration facade (streams/consumers/backup, spec
+	// §6.6/§6.7): CallResult-embedding results over jsm handles keyed off the
+	// active connection's domain/API prefix.
+	jsAdminSvc := jsadmin.NewJetAdminService(manager, logger, emit, settingsPath)
+
 	// settings.LastActiveContext persistence: load-modify-save on every
 	// successful Connect (spec §6.1). Routed through settings.Update so it
 	// shares the same serializer as SaveSettings — a settings save landing
@@ -120,6 +126,7 @@ func main() {
 			application.NewService(logging.NewService()),
 			application.NewService(connSvc),
 			application.NewService(msgSvc),
+			application.NewService(jsAdminSvc),
 			application.NewService(version.NewService()),
 		},
 		Assets: application.AssetOptions{
