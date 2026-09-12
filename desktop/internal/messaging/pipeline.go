@@ -4,6 +4,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nats-io/nats.go"
 )
 
 // isUTF8 reports whether a message payload is valid UTF-8 (spec §6.4:
@@ -11,6 +13,33 @@ import (
 // valid UTF-8.
 func isUTF8(b []byte) bool {
 	return utf8.Valid(b)
+}
+
+// HeadersMatchFilters reports whether every filter key is present with an
+// exactly equal value (AND semantics; spec §6.4 optional header filter,
+// Go-side so flood-rate streams are filtered near the source). Key lookup is
+// case-sensitive (NATS header names are case-sensitive on the wire) and a
+// filter matches when ANY of the header's values equals the wanted value.
+// Empty/nil filters match everything, so a session without filters pays only
+// the len check on its receive path.
+func HeadersMatchFilters(h nats.Header, filters map[string]string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	for k, want := range filters {
+		got, ok := h[k]
+		if !ok {
+			return false
+		}
+		for _, v := range got {
+			if v == want {
+				goto next
+			}
+		}
+		return false
+	next:
+	}
+	return true
 }
 
 // --- ring ------------------------------------------------------------------

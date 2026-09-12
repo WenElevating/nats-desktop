@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -27,6 +29,14 @@ import (
 //   - Emitted    = messages handed to the pusher (recorder-visible session:msgs).
 //   - Dropped    = ring evictions (oldest dropped when the buffer is full).
 //   - BufferUsed = current ring occupancy.
+//   - Filtered   = receipts dropped by the session's header filter before any
+//     counting/ring/push (M3 Task 7): they never become MsgOut and never touch
+//     rate/ring/pusher, so the extension of the invariant reads
+//
+//	received == delivered_total + filtered      (filter side: nothing vanishes)
+//
+//   - and the delivered side keeps M2's two-sided conservation unchanged
+//     (Total == Emitted ∧ Total == Dropped + BufferUsed).
 //
 // In realtime mode every received message is BOTH handed to the pusher and
 // written to the ring, so the brief's one-line invariant decomposes into the
@@ -46,6 +56,8 @@ type emitRecorder struct {
 	mu      sync.Mutex
 	names   []string
 	batches []timedBatch              // every session:msgs batch, in emit order
+	lean    bool                      // lean mode: count msgs, do not retain batches
+	leanN   int                       // lean mode: total msgs seen (all sessions)
 	states  map[string][]SessionState // per session id, in emit order
 	conn    []connections.StateEvent  // conn:state payloads seen
 }
@@ -54,12 +66,25 @@ func newEmitRecorder() *emitRecorder {
 	return &emitRecorder{states: map[string][]SessionState{}}
 }
 
+// newLeanEmitRecorder returns a recorder that does NOT retain session:msgs
+// batches (only counts them): at flood volumes the retained MsgOut slice slows
+// the session dispatcher into nats.go's slow-consumer protection, the same
+// reason the M2 stress gate uses its O(1) stressEmit sink. session:state
+// payloads are still retained, so lastState works.
+func newLeanEmitRecorder() *emitRecorder {
+	return &emitRecorder{lean: true, states: map[string][]SessionState{}}
+}
+
 func (r *emitRecorder) emit(name string, data any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.names = append(r.names, name)
 	switch v := data.(type) {
 	case []MsgOut:
+		if r.lean {
+			r.leanN += len(v)
+			return
+		}
 		r.batches = append(r.batches, timedBatch{b: v, at: time.Now()})
 	case SessionState:
 		r.states[v.ID] = append(r.states[v.ID], v)
@@ -69,9 +94,14 @@ func (r *emitRecorder) emit(name string, data any) {
 }
 
 // msgCount returns how many messages of session id have been emitted so far.
+// (In lean mode batches are not retained; the count is then the cross-session
+// total, which is exact for single-session lean stacks.)
 func (r *emitRecorder) msgCount(id string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.lean {
+		return r.leanN
+	}
 	n := 0
 	for _, tb := range r.batches {
 		if len(tb.b) > 0 && tb.b[0].SessionID == id {
@@ -154,8 +184,14 @@ func (r *emitRecorder) lastState(id string) (SessionState, bool) {
 // and session events are captured by the recorder.
 func newSessionStack(t *testing.T, url string, defaultBuf int, defaultPush PushMode) (*connections.Manager, *SessionManager, *emitRecorder) {
 	t.Helper()
+	return newSessionStackRec(t, url, defaultBuf, defaultPush, newEmitRecorder())
+}
+
+// newSessionStackRec is newSessionStack with a caller-provided recorder — the
+// flood gate passes a lean recorder (see newLeanEmitRecorder).
+func newSessionStackRec(t *testing.T, url string, defaultBuf int, defaultPush PushMode, rec *emitRecorder) (*connections.Manager, *SessionManager, *emitRecorder) {
+	t.Helper()
 	reg := natscontext.NewRegistry(natscontext.NewFileBackendAt(t.TempDir()))
-	rec := newEmitRecorder()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	var sm *SessionManager
@@ -948,7 +984,7 @@ func TestSessionTypesJSONContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"id":"sub-1","subject":"orders.received","state":"running","push_mode":"realtime","rate_msg_s":12.5,"total":42,"dropped":7,"buffer_used":35}`
+	want := `{"id":"sub-1","subject":"orders.received","state":"running","push_mode":"realtime","rate_msg_s":12.5,"total":42,"filtered":0,"dropped":7,"buffer_used":35}`
 	if string(got) != want {
 		t.Fatalf("SessionState JSON drifted from contract:\n got  %s\n want %s", got, want)
 	}
@@ -957,7 +993,7 @@ func TestSessionTypesJSONContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = `{"id":"sub-1","subject":"orders.received","state":"running","push_mode":"realtime","rate_msg_s":12.5,"total":42,"dropped":7,"buffer_used":35,"error":"boom"}`
+	want = `{"id":"sub-1","subject":"orders.received","state":"running","push_mode":"realtime","rate_msg_s":12.5,"total":42,"filtered":0,"dropped":7,"buffer_used":35,"error":"boom"}`
 	if string(got) != want {
 		t.Fatalf("SessionState Error tag wrong:\n got  %s\n want %s", got, want)
 	}
@@ -982,6 +1018,39 @@ func TestSessionTypesJSONContract(t *testing.T) {
 
 	if EventSessionMsgs != "session:msgs" || EventSessionState != "session:state" {
 		t.Fatalf("event name contract drifted: %q / %q", EventSessionMsgs, EventSessionState)
+	}
+}
+
+// TestSessionStateFilteredFieldPins pins the header-filter conservation field
+// on the wire (M3 Task 7): `filtered` sits right after `total` so the JSON
+// reads received == total + filtered, and it has no omitempty — every
+// session:state payload carries it, letting the frontend render the
+// "filtered" chip without version drift.
+func TestSessionStateFilteredFieldPins(t *testing.T) {
+	st := SessionState{ID: "sub-9", Total: 100, Filtered: 40}
+	got, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"id":"sub-9","subject":"","state":"","push_mode":"","rate_msg_s":0,"total":100,"filtered":40,"dropped":0,"buffer_used":0}`
+	if string(got) != want {
+		t.Fatalf("SessionState filtered field drifted:\n got  %s\n want %s", got, want)
+	}
+
+	// The request-side spec gains header_filters (omitempty): absent when the
+	// session has no filters, snake_case key on the wire.
+	spec, err := json.Marshal(SessionSpec{Subject: "s", HeaderFilters: map[string]string{"Env": "prod"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSpec := `{"subject":"s","push_mode":"","buffer_size":0,"header_filters":{"Env":"prod"}}`
+	if string(spec) != wantSpec {
+		t.Fatalf("SessionSpec header_filters tag drifted:\n got  %s\n want %s", spec, wantSpec)
+	}
+	if plain, err := json.Marshal(SessionSpec{Subject: "x"}); err != nil {
+		t.Fatal(err)
+	} else if wantPlain := `{"subject":"x","push_mode":"","buffer_size":0}`; string(plain) != wantPlain {
+		t.Fatalf("SessionSpec zero form drifted:\n got  %s\n want %s", plain, wantPlain)
 	}
 }
 
@@ -1110,6 +1179,211 @@ func TestReceiptsEmitStateEventsLocalServer(t *testing.T) {
 func TestRateDecaysToZeroLocalServer(t *testing.T) {
 	requireLocalServer(t)
 	scenarioRateDecaysToZero(t, localServerURL)
+}
+
+// --- header filtering (M3 Task 7) ------------------------------------------------
+
+// smTestConn opens the publisher/injector-side client connection used by the
+// session tests (the session's own subscription lives on the stack manager's
+// connection). Cleanup closes it with the test.
+func smTestConn(t *testing.T, url string) *nats.Conn {
+	t.Helper()
+	return connect(t, url) // nats.Connect + t.Cleanup(nc.Close)
+}
+
+// waitForCond polls cond every 20ms until it holds, failing the test after
+// timeout (state events are throttled to 250ms, so polling — not waiting on
+// channels — is the right shape for recorder assertions).
+func waitForCond(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %v", timeout)
+}
+
+// flushSessionSub deterministically gates publishing on server-side SUB
+// registration. nats.Subscribe only QUEUES the SUB protocol line on the
+// manager connection's write buffer; a message published (on any connection)
+// before the server processes that SUB is silently not delivered (at-most-once
+// delivery), which breaks exact-count conservation assertions by a handful of
+// early messages. Flush round-trips PING/PONG on that same connection, so when
+// it returns the SUB is registered and everything published afterwards is
+// observable by the session.
+func flushSessionSub(t *testing.T, sm *SessionManager, id string) {
+	t.Helper()
+	s := getSession(t, sm, id)
+	s.mu.Lock()
+	nc := s.subNC
+	s.mu.Unlock()
+	if nc == nil {
+		t.Fatal("session has no subscription connection (not subscribed)")
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("subscription flush failed: %v", err)
+	}
+}
+
+// TestSessionHeaderFiltering: a session with HeaderFilters {"Env":"prod"} only
+// receives the matching half of a 20-message alternate stream — Total==10,
+// Filtered==10 (conservation: received 20 == delivered 10 + filtered 10), and
+// the pusher emitted exactly the 10 hits.
+func TestSessionHeaderFiltering(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	_, sm, rec := newSessionStack(t, url, 10000, PushRealtime)
+	nc := smTestConn(t, url)
+	subj := "filter.e2e." + uniqueSuffix()
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: subj, HeaderFilters: map[string]string{"Env": "prod"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := st.ID
+	flushSessionSub(t, sm, sid) // SUB registered server-side before the burst
+	for i := 0; i < 20; i++ {
+		var msg *nats.Msg
+		if i%2 == 0 {
+			msg = &nats.Msg{Subject: subj, Data: []byte("hit"), Header: nats.Header{"Env": {"prod"}}}
+		} else {
+			msg = &nats.Msg{Subject: subj, Data: []byte("miss"), Header: nats.Header{"Env": {"dev"}}}
+		}
+		if err := nc.PublishMsg(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nc.Flush()
+	waitForCond(t, 2*time.Second, func() bool {
+		st, ok := rec.lastState(sid)
+		return ok && st.Total == 10 && st.Filtered == 10
+	})
+	// Pushed messages contain only the hits (recorder's existing msgCount).
+	if got := rec.msgCount(sid); got != 10 {
+		t.Fatalf("emitted messages: %d", got)
+	}
+}
+
+// TestSessionHeaderFilterFloodConservationLocalServer: Global Constraint 8 —
+// 50k msg/s-level injection with filtering on must conserve (received ==
+// Total + Filtered) without collapsing the rate or dropping anything. The
+// session buffer is sized (200k) so the delivered half never overflows the
+// ring — this keeps the brief's "no unexpected drops at this rate" assertion
+// meaningful AND keeps M2's delivered-side invariant Total == Dropped +
+// BufferUsed intact (with the 10k default the ring would necessarily evict
+// 90k of the 100k delivered hits, which is drop-oldest behavior, not loss).
+// M2 measured ~628k msg/s in-process injection on this machine, so the 200k
+// flood clears the hard 50k msg/s gate with ~12x headroom.
+func TestSessionHeaderFilterFloodConservationLocalServer(t *testing.T) {
+	// Global Constraint 8: 50k msg/s-scale injection + conservation and live
+	// rate with filtering enabled. Local-server only (CI skips cleanly).
+	requireLocalServer(t)
+	rec := newLeanEmitRecorder() // flood volume: never retain the 100k hit batches
+	_, sm, _ := newSessionStackRec(t, localServerURL, 10000, PushRealtime, rec)
+	inj := smTestConn(t, localServerURL)
+	subj := "filter.flood." + uniqueSuffix()
+	st, err := sm.CreateSession(context.Background(), SessionSpec{
+		Subject: subj, BufferSize: 200_000, HeaderFilters: map[string]string{"Env": "prod"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := st.ID
+	flushSessionSub(t, sm, sid) // SUB registered server-side before the burst
+	const total = 200_000
+	// Global Constraint 8 mandates the 50k msg/s LEVEL, so the injection is
+	// PACED 20% above the hard gate and self-corrects against the wall clock.
+	// An unbounded loop bursts at ~400-600k msg/s here, parking >64MB of
+	// queued *nats.Msg (small messages + per-message header maps) in the
+	// session's subscription and tripping nats.go's deliberate slow-consumer
+	// valve (500k msgs / 64MB pending bytes) — a burst artifact, not a
+	// pipeline property: the dispatcher sustains the mandated level with a
+	// wide margin, and paced injection makes the conservation assertion
+	// deterministic instead of GC-lucky.
+	const (
+		paceRate  = 60_000 // msg/s — mandate level +20% headroom over the 50k gate
+		paceBatch = 1_000  // messages per pacing slice (~16.7ms at paceRate)
+	)
+	start := time.Now()
+	for i := 0; i < total; i++ {
+		msg := &nats.Msg{Subject: subj, Data: []byte("x")}
+		if i%2 == 0 {
+			msg.Header = nats.Header{"Env": {"prod"}}
+		} else {
+			msg.Header = nats.Header{"Env": {"dev"}}
+		}
+		if err := inj.PublishMsg(msg); err != nil {
+			t.Fatal(err)
+		}
+		if (i+1)%paceBatch == 0 {
+			if d := time.Duration(float64(i+1)/paceRate*float64(time.Second)) - time.Since(start); d > 0 {
+				time.Sleep(d)
+			}
+		}
+	}
+	inj.Flush()
+	achieved := float64(total) / time.Since(start).Seconds()
+	t.Logf("flood injection rate: %.0f msg/s (mandate gate: 50000)", achieved)
+	if achieved < 50_000 {
+		t.Fatalf("flood level not reached: %.0f msg/s (mandate: 50k)", achieved)
+	}
+	waitForCond(t, 10*time.Second, func() bool {
+		st, ok := rec.lastState(sid)
+		return ok && st.Total+st.Filtered == total
+	})
+	final, _ := rec.lastState(sid)
+	if final.Total != total/2 || final.Filtered != total/2 {
+		t.Fatalf("conservation: total=%d filtered=%d", final.Total, final.Filtered)
+	}
+	if final.Dropped != 0 {
+		t.Fatalf("unexpected drops at this rate: %d", final.Dropped)
+	}
+	if final.Total != int64(final.Dropped)+int64(final.BufferUsed) {
+		t.Fatalf("delivered-side conservation broken: Total %d != Dropped %d + BufferUsed %d",
+			final.Total, final.Dropped, final.BufferUsed)
+	}
+	if final.RateMsgS <= 0 {
+		t.Fatalf("rate must stay live under filtered flood (final state: %+v)", final)
+	}
+}
+
+// TestValidateHeaderFilters bounds the filter form (spec §6.4): nil/empty
+// allowed, at most 8 pairs, key/value at most 256 bytes each.
+func TestValidateHeaderFilters(t *testing.T) {
+	ok := []map[string]string{
+		nil,
+		{},
+		{"Env": "prod"},
+	}
+	eight := map[string]string{}
+	for i := 0; i < 8; i++ {
+		eight[fmt.Sprintf("K%d", i)] = "v"
+	}
+	ok = append(ok, eight)
+	for _, f := range ok {
+		if err := validateHeaderFilters(f); err != nil {
+			t.Fatalf("must accept %d pairs: %v", len(f), err)
+		}
+	}
+
+	nine := map[string]string{}
+	for i := 0; i < 9; i++ {
+		nine[fmt.Sprintf("K%d", i)] = "v"
+	}
+	bad := []map[string]string{
+		nine,
+		{strings.Repeat("k", 257): "v"},
+		{"k": strings.Repeat("v", 257)},
+	}
+	for _, f := range bad {
+		if err := validateHeaderFilters(f); !errors.Is(err, ErrInvalidHeaderFilter) {
+			t.Fatalf("must reject %d-pair/oversize filter, got %v", len(f), err)
+		}
+	}
+	// Exactly at the byte bound is still fine.
+	if err := validateHeaderFilters(map[string]string{strings.Repeat("k", 256): strings.Repeat("v", 256)}); err != nil {
+		t.Fatalf("256-byte key/value must be accepted: %v", err)
+	}
 }
 
 // --- reconnect (inline restartable server; can't restart the shared one) -------

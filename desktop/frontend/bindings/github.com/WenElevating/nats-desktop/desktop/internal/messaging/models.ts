@@ -105,6 +105,7 @@ export interface SessionSpec {
     "push_mode": PushMode;
     "buffer_size": number;
     "js_position"?: JSPosition | null;
+    "header_filters"?: { [_ in string]?: string } | null;
 }
 
 /**
@@ -121,6 +122,7 @@ export interface SessionState {
     "push_mode": PushMode;
     "rate_msg_s": number;
     "total": number;
+    "filtered": number;
     "dropped": number;
     "buffer_used": number;
     "error"?: string;

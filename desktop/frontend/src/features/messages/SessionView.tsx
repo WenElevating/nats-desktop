@@ -239,6 +239,11 @@ export function SessionView({ session, msgs, onPause, onResume, onClear, onClose
         <span data-testid="session-total" className="text-xs text-[var(--fg-muted)]">
           {t("messages.sessions.total", { n: session.total })}
         </span>
+        {/* Header-filtered receipts (received == total + filtered); a state
+         * event missing the newer field counts as 0. */}
+        <span data-testid="session-filtered" className="text-xs text-[var(--fg-muted)]">
+          {t("messages.sessions.filteredCount", { count: session.filtered ?? 0 })}
+        </span>
         {session.dropped > 0 && (
           <Badge variant="destructive" data-testid="session-dropped">
             {t("messages.sessions.dropped", { n: session.dropped })}

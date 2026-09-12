@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
 import {
@@ -19,6 +19,19 @@ import { Label } from "@/components/ui/label";
 /** The five JS positioning choices (spec §6.4); "none" = plain core NATS
  * subscription (no js_position on the wire). */
 type JsMode = "none" | "all" | "new" | "start_sequence" | "start_time";
+
+/** One editable header-filter row. id is a stable useId()-derived token (M2
+ * legacy §6-7: never the array index) so React keeps each input mounted
+ * across sibling add/remove instead of shifting row state. */
+interface FilterRow {
+  id: string;
+  key: string;
+  value: string;
+}
+
+/** Wire + service cap on header_filters pairs (messaging CreateSession
+ * rejects more; the form never sends an oversized set). */
+const MAX_FILTER_ROWS = 8;
 
 /** Build the wire JSPosition from the folded region's state. "none" yields
  * undefined (omitted from the spec → core subscription on the Go side); an
@@ -66,8 +79,28 @@ export function SessionsPanel() {
   const [jsMode, setJsMode] = useState<JsMode>("none");
   const [startSeq, setStartSeq] = useState("");
   const [startTime, setStartTime] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filterRows, setFilterRows] = useState<FilterRow[]>([]);
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Stable row ids: one useId() prefix + a monotonic counter, so a row keeps
+  // its identity through removals and rows never collide (index keys would).
+  const filterIdBase = useId();
+  const filterSeq = useRef(0);
+
+  const addFilterRow = () => {
+    // The id is minted outside the updater so it stays pure (StrictMode may
+    // double-invoke updaters); a skipped number on a rejected add is harmless.
+    const id = `${filterIdBase}-${filterSeq.current++}`;
+    setFilterRows((rows) =>
+      rows.length >= MAX_FILTER_ROWS ? rows : [...rows, { id, key: "", value: "" }],
+    );
+  };
+  const removeFilterRow = (id: string) =>
+    setFilterRows((rows) => rows.filter((r) => r.id !== id));
+  const patchFilterRow = (id: string, patch: Partial<Omit<FilterRow, "id">>) =>
+    setFilterRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
   // Default push mode comes from the user's session_push_batching setting
   // (realtime when false / unset); a failed load keeps the realtime default.
@@ -94,17 +127,26 @@ export function SessionsPanel() {
     const subj = subject.trim();
     if (!subj || creating) return;
     setCreating(true);
+    // Header filters: trimmed, rows without a key stripped (a blank row is
+    // not an intent to filter); the map rides the wire only when non-empty.
+    const headerFilters: Record<string, string> = {};
+    for (const row of filterRows) {
+      const k = row.key.trim();
+      if (k) headerFilters[k] = row.value.trim();
+    }
     const spec: SessionSpec = {
       subject: subj,
       push_mode: batch ? PushMode.PushBatch : PushMode.PushRealtime,
       buffer_size: 0,
       js_position: buildJsPosition(jsMode, startSeq, startTime),
+      header_filters: Object.keys(headerFilters).length > 0 ? headerFilters : undefined,
     };
     const st = await create(spec);
     setCreating(false);
     if (st) {
       setSelectedId(st.id);
       setSubject("");
+      setFilterRows([]);
     }
   };
 
@@ -204,7 +246,7 @@ export function SessionsPanel() {
                     id="js-start-seq"
                     data-testid="js-start-seq"
                     type="number"
-                    min={0}
+                    min={1}
                     value={startSeq}
                     disabled={!connected}
                     className="font-mono"
@@ -231,6 +273,70 @@ export function SessionsPanel() {
             <p data-testid="sessions-not-connected" className="text-xs text-[var(--fg-muted)]">
               {t("messages.sessions.notConnected")}
             </p>
+          )}
+        </div>
+
+        {/* Folded header-filter region (spec §6.4): AND exact-match key/value
+         * pairs, matched Go-side before counting so floods are filtered at
+         * the source. Same fold pattern as the JS positioning region. */}
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            data-testid="filters-toggle"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((v) => !v)}
+            className="flex w-fit items-center gap-1 text-sm text-[var(--fg-muted)] outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            {filtersOpen ? (
+              <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
+            )}
+            {t("messages.sessions.filterTitle")}
+          </button>
+          {filtersOpen && (
+            <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+              {filterRows.map((row) => (
+                <div key={row.id} data-testid="filter-row" className="flex items-center gap-2">
+                  <Input
+                    aria-label={t("messages.sessions.filterKey")}
+                    placeholder={t("messages.sessions.filterKey")}
+                    value={row.key}
+                    disabled={!connected}
+                    className="font-mono"
+                    onChange={(e) => patchFilterRow(row.id, { key: e.target.value })}
+                  />
+                  <Input
+                    aria-label={t("messages.sessions.filterValue")}
+                    placeholder={t("messages.sessions.filterValue")}
+                    value={row.value}
+                    disabled={!connected}
+                    className="font-mono"
+                    onChange={(e) => patchFilterRow(row.id, { value: e.target.value })}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("messages.removeHeader")}
+                    disabled={!connected}
+                    onClick={() => removeFilterRow(row.id)}
+                  >
+                    <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-fit"
+                data-testid="filter-add"
+                disabled={!connected || filterRows.length >= MAX_FILTER_ROWS}
+                onClick={addFilterRow}
+              >
+                <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
+                {t("messages.sessions.filterAdd")}
+              </Button>
+            </div>
           )}
         </div>
       </div>

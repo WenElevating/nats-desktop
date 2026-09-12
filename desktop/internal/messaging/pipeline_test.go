@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 // --- ring -----------------------------------------------------------------
@@ -329,5 +331,41 @@ func TestPipelineThroughputSanity(t *testing.T) {
 	// Bulk run doubles as a drop-accounting check: cap 10000 must drop exactly n-10000.
 	if d := r.Dropped(); d != n-10000 {
 		t.Fatalf("ring dropped = %d want %d", d, n-10000)
+	}
+}
+
+// --- header filters (spec §6.4 optional header filter, Go-side match) -------
+
+func TestHeadersMatchFilters(t *testing.T) {
+	h := nats.Header{"Env": {"prod"}, "X-B": {"2"}}
+	if !HeadersMatchFilters(h, nil) || !HeadersMatchFilters(h, map[string]string{}) {
+		t.Fatal("empty filters must match everything")
+	}
+	if !HeadersMatchFilters(h, map[string]string{"Env": "prod"}) {
+		t.Fatal("single exact match")
+	}
+	if !HeadersMatchFilters(h, map[string]string{"Env": "prod", "X-B": "2"}) {
+		t.Fatal("AND match")
+	}
+	for _, f := range []map[string]string{
+		{"Env": "dev"}, {"env": "prod"}, {"Missing": "x"}, {"Env": "prod", "Missing": "x"},
+	} {
+		if HeadersMatchFilters(h, f) {
+			t.Fatalf("must not match %v", f)
+		}
+	}
+}
+
+func TestHeaderMatchPerformance(t *testing.T) {
+	h := nats.Header{"Env": {"prod"}, "Svc": {"orders"}, "Ver": {"3"}}
+	filters := map[string]string{"Env": "prod", "Svc": "orders"}
+	start := time.Now()
+	const n = 1_000_000
+	for i := 0; i < n; i++ {
+		HeadersMatchFilters(h, filters)
+	}
+	per := time.Since(start) / n
+	if per > 500*time.Nanosecond { // 洪峰 50k/s 时占预算 <2.5%（预算 20µs/msg）
+		t.Fatalf("filter too slow: %v/match", per)
 	}
 }

@@ -43,19 +43,60 @@ type config struct {
 	rate    int
 	size    int
 	dur     time.Duration
+	headers nats.Header // from repeatable -header k=v flags; nil when none
+}
+
+// headerFlags collects repeatable -header k=v occurrences (flag.Value): Task
+// 15's UIA smoke drives "flood with mixed headers" sessions through it.
+type headerFlags []string
+
+func (h *headerFlags) String() string { return strings.Join(*h, ",") }
+func (h *headerFlags) Set(s string) error {
+	*h = append(*h, s)
+	return nil
+}
+
+// parseHeaders turns the raw -header k=v entries into a nats.Header: at most
+// 8 pairs (the session header-filter form bound, spec §6.4), non-empty key,
+// key/value at most 256 bytes each. The FIRST '=' splits, so values may
+// contain '='; repeated keys accumulate multiple values.
+func parseHeaders(raw []string) (nats.Header, error) {
+	if len(raw) > 8 {
+		return nil, fmt.Errorf("-header allows at most 8 pairs, got %d", len(raw))
+	}
+	h := make(nats.Header, len(raw))
+	for _, kv := range raw {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || strings.TrimSpace(k) == "" {
+			return nil, fmt.Errorf("-header must be k=v with a non-empty key, got %q", kv)
+		}
+		if len(k) > 256 || len(v) > 256 {
+			return nil, fmt.Errorf("-header key/value must be at most 256 bytes each")
+		}
+		h[k] = append(h[k], v)
+	}
+	return h, nil
 }
 
 func parseFlags() (config, error) {
 	var c config
 	var dur time.Duration
+	var rawHeaders headerFlags
 	flag.StringVar(&c.url, "url", "nats://127.0.0.1:4333", "NATS server URL")
 	flag.StringVar(&c.subject, "subject", "m2flood.x", "subject to publish to")
 	flag.IntVar(&c.rate, "rate", 1000, "target rate in messages per second")
 	flag.IntVar(&c.size, "size", 1024, "payload size in bytes")
 	flag.DurationVar(&dur, "dur", 10*time.Second, "publish duration (e.g. 10s, 1m)")
+	flag.Var(&rawHeaders, "header", "message header k=v (repeatable, at most 8 pairs, key/value up to 256 bytes)")
 	check := flag.Bool("c", false, "validate flags and exit without connecting")
 	flag.Parse()
 	c.dur = dur
+
+	hdrs, err := parseHeaders(rawHeaders)
+	if err != nil {
+		return c, err
+	}
+	c.headers = hdrs
 
 	if err := c.validate(); err != nil {
 		return c, err
@@ -84,7 +125,7 @@ func (c config) validate() error {
 }
 
 func (c config) String() string {
-	return fmt.Sprintf("url=%s subject=%s rate=%d msg/s size=%dB dur=%v", c.url, c.subject, c.rate, c.size, c.dur)
+	return fmt.Sprintf("url=%s subject=%s rate=%d msg/s size=%dB dur=%v headers=%d", c.url, c.subject, c.rate, c.size, c.dur, len(c.headers))
 }
 
 func main() {
@@ -111,6 +152,9 @@ func main() {
 
 	msg := nats.NewMsg(c.subject)
 	msg.Data = payload
+	if len(c.headers) > 0 { // Task 15 UIA smoke: flood with mixed headers
+		msg.Header = c.headers
+	}
 
 	// Token-accumulator pacing: each tick credits rate*tickEvery tokens
 	// (fractional tokens carry over), so the long-run average is exactly the

@@ -153,11 +153,17 @@ func consumerConfigFor(pos *JSPosition, subject string) (jetstream.ConsumerConfi
 }
 
 // handleJS is the Consume callback for positioned sessions. nats.go runs it
-// serially per consume context, so emissions keep StreamSeq order. StreamSeq
-// carries the stream sequence from the message metadata (a failure would
-// mean a non-JS delivery — logged without payload, never expected); ring /
-// pause / push handling is shared with the core path via deliver.
+// serially per consume context, so emissions keep StreamSeq order. Header
+// filtering runs FIRST, exactly as on the core path (s.handle): a miss is
+// counted in filtered and dropped before any seq/rate/ring/push work.
+// StreamSeq carries the stream sequence from the message metadata (a failure
+// would mean a non-JS delivery — logged without payload, never expected);
+// ring / pause / push handling is shared with the core path via deliver.
 func (s *session) handleJS(m jetstream.Msg) {
+	if !HeadersMatchFilters(m.Headers(), s.headerFilters) {
+		s.filtered.Add(1) // 仅计数：不进 ring、不推送、不计速率
+		return
+	}
 	out := buildMsgOut(s.id, s.seq.Add(1), s.subject, m.Data(), m.Headers())
 	if meta, err := m.Metadata(); err != nil {
 		s.log.Warn("jetstream message metadata unavailable", "id", s.id, "subject", s.subject, "err", err)

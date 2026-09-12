@@ -22,12 +22,16 @@
 //     continues (new).
 //
 // Per-message flow (handler runs on nats.go client goroutines, one dispatcher
-// per subscription, so emissions of a session are ordered by Seq): assemble
-// MsgOut (seq from an atomic counter starting at 1) -> rate.Inc -> under the
-// session mutex: total++ and ring.Add (ring scrolls whether paused or not) ->
-// outside the session mutex, only when not paused: emitted++, pusher.Add ->
-// session:msgs, and throttle.notify() -> session:state coalesced to <=250ms
-// (plus one quiet-period refresh so a non-zero rate decays to 0 on screen).
+// per subscription, so emissions of a session are ordered by Seq): header
+// filter first — a receipt missing the session's HeaderFilters (spec §6.4
+// optional header filter) bumps the filtered counter and returns, touching
+// neither seq/rate/ring/pusher (conservation: received == total + filtered) —
+// then for delivered receipts: assemble MsgOut (seq from an atomic counter
+// starting at 1) -> rate.Inc -> under the session mutex: total++ and ring.Add
+// (ring scrolls whether paused or not) -> outside the session mutex, only
+// when not paused: emitted++, pusher.Add -> session:msgs, and
+// throttle.notify() -> session:state coalesced to <=250ms (plus one
+// quiet-period refresh so a non-zero rate decays to 0 on screen).
 // Payload content is never logged (spec §13.3); only subject/size/seq/counters
 // reach the logger.
 
@@ -79,10 +83,11 @@ const defaultSessionBuffer = 10000
 // Errors surfaced by SessionManager methods. ErrInvalidSubject is the
 // E-VALIDATION-style rejection: it fires before any network call.
 var (
-	ErrInvalidSubject  = errors.New("invalid subject: must be non-empty and contain no whitespace")
-	ErrSessionNotFound = errors.New("session not found")
-	ErrSessionClosed   = errors.New("session closed")
-	ErrManagerClosed   = errors.New("session manager closed")
+	ErrInvalidSubject      = errors.New("invalid subject: must be non-empty and contain no whitespace")
+	ErrInvalidHeaderFilter = errors.New("invalid header filters: at most 8 pairs with keys and values up to 256 bytes each")
+	ErrSessionNotFound     = errors.New("session not found")
+	ErrSessionClosed       = errors.New("session closed")
+	ErrManagerClosed       = errors.New("session manager closed")
 )
 
 // SessionManager owns all subscription sessions and forwards their events to
@@ -140,7 +145,10 @@ func NewSessionManager(mgr *connections.Manager, log *slog.Logger, emit func(nam
 
 // CreateSession subscribes to spec.Subject and starts the session. The
 // subject is validated BEFORE any network call (ErrInvalidSubject for empty or
-// whitespace-containing subjects). A non-nil JSPosition routes the session to
+// whitespace-containing subjects), as are the optional HeaderFilters
+// (ErrInvalidHeaderFilter for more than 8 pairs or a key/value over 256 bytes
+// — spec §6.4 bounds the filter form; nil/empty means no filtering). A
+// non-nil JSPosition routes the session to
 // the JetStream positioned-replay path (jsposition.go) for the whole closed
 // set all|new|start_sequence|start_time — an explicitly provided js_position
 // must carry an explicit valid mode — while nil keeps the core path (Task 4).
@@ -149,6 +157,9 @@ func NewSessionManager(mgr *connections.Manager, log *slog.Logger, emit func(nam
 // verbatim error text (spec §6.4) and returns that error as well.
 func (m *SessionManager) CreateSession(ctx context.Context, spec SessionSpec) (SessionState, error) {
 	if err := validateSubject(spec.Subject); err != nil {
+		return SessionState{}, err
+	}
+	if err := validateHeaderFilters(spec.HeaderFilters); err != nil {
 		return SessionState{}, err
 	}
 	if spec.JSPosition != nil {
@@ -175,7 +186,7 @@ func (m *SessionManager) CreateSession(ctx context.Context, spec SessionSpec) (S
 		return SessionState{}, ErrManagerClosed
 	}
 	id := fmt.Sprintf("sub-%d", m.counter.Add(1))
-	s := newSession(id, spec.Subject, spec.JSPosition, push, buf, m.log, m.emit)
+	s := newSession(id, spec.Subject, spec.JSPosition, push, buf, spec.HeaderFilters, m.log, m.emit)
 	m.sessions[id] = s
 	m.mu.Unlock()
 
@@ -208,6 +219,34 @@ func (m *SessionManager) conn() *nats.Conn {
 func validateSubject(subject string) error {
 	if subject == "" || strings.ContainsAny(subject, " \t\r\n") {
 		return fmt.Errorf("%w: got %q", ErrInvalidSubject, subject)
+	}
+	return nil
+}
+
+// Bounds for the optional session header filter form (spec §6.4): at most 8
+// key/value pairs, each key and value at most 256 bytes. Bytes, not runes —
+// the filter travels in message headers, which are byte-oriented.
+const (
+	maxHeaderFilterPairs = 8
+	maxHeaderFilterBytes = 256
+)
+
+// validateHeaderFilters bounds the optional HeaderFilters form before anything
+// is subscribed: nil/empty is allowed (no filtering); more than
+// maxHeaderFilterPairs pairs, or a key/value longer than maxHeaderFilterBytes
+// bytes, is rejected with ErrInvalidHeaderFilter. Error text names the
+// offending SIDE only — never key/value content (spec §13.3 discipline).
+func validateHeaderFilters(filters map[string]string) error {
+	if len(filters) > maxHeaderFilterPairs {
+		return fmt.Errorf("%w: got %d pairs", ErrInvalidHeaderFilter, len(filters))
+	}
+	for k, v := range filters {
+		if len(k) > maxHeaderFilterBytes {
+			return fmt.Errorf("%w: a filter key exceeds %d bytes", ErrInvalidHeaderFilter, maxHeaderFilterBytes)
+		}
+		if len(v) > maxHeaderFilterBytes {
+			return fmt.Errorf("%w: a filter value exceeds %d bytes", ErrInvalidHeaderFilter, maxHeaderFilterBytes)
+		}
 	}
 	return nil
 }
@@ -390,10 +429,11 @@ func (m *SessionManager) get(id string) (*session, error) {
 //   - Lock ordering is strictly session.mu -> ring.mu / rate.mu; the throttle
 //     releases its own mutex before taking session.mu to build a snapshot.
 type session struct {
-	id      string
-	subject string
-	mode    PushMode
-	cap     int
+	id            string
+	subject       string
+	mode          PushMode
+	cap           int
+	headerFilters map[string]string // optional; nil/empty = match everything
 
 	mu     sync.Mutex
 	state  string             // running | paused | closed
@@ -411,26 +451,28 @@ type session struct {
 	cctx   jetstream.ConsumeContext
 	cctxNC *nats.Conn
 
-	seq     atomic.Int64 // per-session message seq, monotonic from 1
-	emitted atomic.Int64 // messages handed to the pusher (excludes paused receipts)
-	total   int64        // receipts since last Clear, paused receipts included (spec: 继续计数)
-	rate    *rateMeter
+	seq      atomic.Int64 // per-session message seq, monotonic from 1
+	emitted  atomic.Int64 // messages handed to the pusher (excludes paused receipts)
+	filtered atomic.Int64 // receipts dropped by headerFilters (never delivered anywhere)
+	total    int64        // DELIVERED receipts since last Clear, paused receipts included (spec: 继续计数)
+	rate     *rateMeter
 
 	throttle *stateThrottle
 	log      *slog.Logger
 }
 
-func newSession(id, subject string, js *JSPosition, mode PushMode, buf int, log *slog.Logger, emit func(name string, data any)) *session {
+func newSession(id, subject string, js *JSPosition, mode PushMode, buf int, headerFilters map[string]string, log *slog.Logger, emit func(name string, data any)) *session {
 	s := &session{
-		id:      id,
-		subject: subject,
-		js:      js,
-		mode:    mode,
-		cap:     buf,
-		state:   SessionRunning,
-		ring:    newRing(buf),
-		rate:    newRateMeter(time.Second),
-		log:     log,
+		id:            id,
+		subject:       subject,
+		js:            js,
+		mode:          mode,
+		cap:           buf,
+		headerFilters: headerFilters,
+		state:         SessionRunning,
+		ring:          newRing(buf),
+		rate:          newRateMeter(time.Second),
+		log:           log,
 	}
 	s.pusher = newPusher(mode, func(batch []MsgOut) {
 		emit(EventSessionMsgs, batch) // payload: []MsgOut — the §7.1.3 wire shape
@@ -440,9 +482,16 @@ func newSession(id, subject string, js *JSPosition, mode PushMode, buf int, log 
 }
 
 // handle is the NATS subscription callback; nats.go runs it on one dispatcher
-// goroutine per subscription, so emissions keep Seq order. The JS path
-// (handleJS in jsposition.go) shares the same deliver machinery.
+// goroutine per subscription, so emissions keep Seq order. Header filtering
+// happens FIRST (spec §6.4 optional header filter): a receipt that misses the
+// session's HeaderFilters is counted in filtered and dropped before it can
+// touch seq/rate/ring/pusher (conservation: received == total + filtered).
+// The JS path (handleJS in jsposition.go) shares the same deliver machinery.
 func (s *session) handle(m *nats.Msg) {
+	if !HeadersMatchFilters(m.Header, s.headerFilters) {
+		s.filtered.Add(1) // 仅计数：不进 ring、不推送、不计速率
+		return
+	}
 	out := buildMsgOut(s.id, s.seq.Add(1), s.subject, m.Data, m.Header)
 	s.deliver(out)
 }
@@ -623,6 +672,7 @@ func (s *session) clear() error {
 	s.ring = newRing(s.cap)
 	s.total = 0
 	s.emitted.Store(0)
+	s.filtered.Store(0) // conservation window resets with the display counters
 	if s.frozen != nil { // paused: keep the display frozen at the reset values
 		frozen := s.computeSnapshotLocked()
 		frozen.RateMsgS = 0
@@ -681,6 +731,7 @@ func (s *session) computeSnapshotLocked() SessionState {
 		PushMode: s.mode,
 		RateMsgS: s.rate.Rate(),
 		Total:    s.total,
+		Filtered: s.filtered.Load(),
 		Error:    s.subErr,
 	}
 	if s.total > int64(s.cap) {
