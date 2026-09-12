@@ -55,6 +55,18 @@ export type {
   TraceForm,
   TraceHop,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/models.js";
+export {
+  GetStreamDetail,
+  ListStreams,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/jsadmin/jetadminservice.js";
+export type {
+  ClusterOut,
+  ListStreamsResult,
+  SourceInfo,
+  StreamDetail,
+  StreamStateOut,
+  StreamSummary,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/jsadmin/models.js";
 
 // Default mirrors settings.Default() in internal/settings/settings.go.
 // Keep the field values in sync with the Go side.

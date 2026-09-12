@@ -4,12 +4,19 @@ import { Shell } from "../src/app/shell";
 
 vi.mock("../src/app/i18n", () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 // shell -> connstate -> lib/bindings pulls in the generated services, whose
-// module scope calls Create.Array — the runtime mock must provide it.
+// module scope calls Create.Array (and, since the streams bindings (M3), the
+// jsadmin models also call Create.Map / Create.Nullable for header maps and
+// nullable structs) — the runtime mock must provide all three.
 vi.mock("@wailsio/runtime", () => ({
   Events: { On: vi.fn(() => () => {}) },
   System: { IsDarkMode: vi.fn(async () => false) },
   Call: { ByID: vi.fn() },
-  Create: { Any: {}, Array: () => (v: unknown) => v },
+  Create: {
+    Any: {},
+    Array: () => (v: unknown) => v,
+    Map: () => (v: unknown) => v,
+    Nullable: () => (v: unknown) => v,
+  },
 }));
 
 it("renders all eight nav entries with svg icons", () => {
