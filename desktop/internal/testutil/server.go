@@ -68,3 +68,19 @@ func StartEcho(t *testing.T, url string) {
 	nc.Flush()
 	t.Cleanup(nc.Close)
 }
+
+// LocalServerURL is the long-lived local test server (user-mandated real
+// server for unit/perf/stress tests; monitor endpoint :8333/jsz).
+const LocalServerURL = "nats://127.0.0.1:4333"
+
+// ConnectLocalServer connects to the local server or skips the test when
+// it is not running (2s probe), mirroring messaging's requireLocalServer.
+func ConnectLocalServer(t *testing.T) *nats.Conn {
+	t.Helper()
+	nc, err := nats.Connect(LocalServerURL, nats.Timeout(2*time.Second), nats.MaxReconnects(0))
+	if err != nil {
+		t.Skipf("local server %s not running: %v", LocalServerURL, err)
+	}
+	t.Cleanup(func() { nc.Close() })
+	return nc
+}

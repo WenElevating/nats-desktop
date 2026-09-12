@@ -177,6 +177,23 @@ func (m *Manager) Conn() *nats.Conn {
 	return m.nc
 }
 
+// JSParams returns the JetStream domain and API prefix configured on the
+// active context ("" when unset). ok is false when not connected.
+func (m *Manager) JSParams() (domain, apiPrefix string, ok bool) {
+	m.mu.Lock()
+	name := m.active
+	connected := m.state == StateConnected
+	m.mu.Unlock()
+	if !connected || name == "" {
+		return "", "", false
+	}
+	c, err := m.reg.Load(context.Background(), name)
+	if err != nil {
+		return "", "", true // connected: fall back to defaults, load errors surface in ops
+	}
+	return c.JSDomain(), c.JSAPIPrefix(), true
+}
+
 // Snapshot returns the current state as a StateEvent.
 func (m *Manager) Snapshot() StateEvent {
 	m.mu.Lock()

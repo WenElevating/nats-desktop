@@ -3,6 +3,8 @@ package messaging
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -172,27 +174,65 @@ func TestTraceNotConnected(t *testing.T) {
 	}
 }
 
-// TestTraceVersionCheck pins the mirrored natscli ServerMinVersion comparison
-// on injected version strings (the server fixtures all satisfy >= 2.11, so the
-// gating logic is only observable through this pure helper).
-func TestTraceVersionCheck(t *testing.T) {
-	cases := []struct {
-		version string
-		want    bool
-	}{
-		{"2.10.0", false},
-		{"2.10.9", false},
-		{"2.9.15", false},
-		{"2.11.0", true},
-		{"2.15.0-preview.1", true}, // embedded fixture and shared local server version
-		{"2.15.1", true},
-		{"3.0.0", true},
-		{"v2.11.0", true}, // leading v tolerated like natscli's semver regex
+// fakeNATSOldServer accepts connections but advertises the given (old) server
+// version in its INFO protocol message, answering only the connect handshake
+// (CONNECT+PING -> PONG). No embeddable nats-server fixture can exercise
+// Trace's version gate (server.Options has no version override and the
+// embedded fixture satisfies >= 2.11), so the gate is observed against this
+// fake instead.
+func fakeNATSOldServer(t *testing.T, version string) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
-		if got := serverVersionAtLeast(c.version, 2, 11, 0); got != c.want {
-			t.Fatalf("serverVersionAtLeast(%q, 2, 11, 0) = %v, want %v", c.version, got, c.want)
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go serveFakeOldInfo(c, l.Addr(), version)
 		}
+	}()
+	return "nats://" + l.Addr().String()
+}
+
+// serveFakeOldInfo performs the minimal NATS handshake: INFO carrying the fake
+// version, then one PONG per client flush (CONNECT+PING) until it goes away.
+func serveFakeOldInfo(c net.Conn, addr net.Addr, version string) {
+	defer c.Close()
+	fmt.Fprintf(c, "INFO {\"server_id\":\"FAKE_OLD\",\"server_name\":\"FAKE_OLD\",\"version\":%q,\"proto\":1,\"host\":%q,\"port\":%d,\"auth_required\":false,\"tls_required\":false,\"max_payload\":1048576}\r\n",
+		version, addr.(*net.TCPAddr).IP.String(), addr.(*net.TCPAddr).Port)
+	buf := make([]byte, 4096)
+	for {
+		if _, err := c.Read(buf); err != nil {
+			return
+		}
+		if _, err := c.Write([]byte("PONG\r\n")); err != nil {
+			return
+		}
+	}
+}
+
+// TestTraceOldServer pins the behavioral version gate: a connected server
+// advertising a pre-2.11 version makes Trace return ErrTraceOldServer before
+// any network side effect. The pure comparison table itself lives in
+// internal/natsver.
+func TestTraceOldServer(t *testing.T) {
+	nc, err := nats.Connect(fakeNATSOldServer(t, "2.10.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+
+	hop, err := Trace(nc, TraceForm{Subject: "s", Payload: []byte("x")})
+	if !errors.Is(err, ErrTraceOldServer) {
+		t.Fatalf("err = %v, want ErrTraceOldServer", err)
+	}
+	if hop.Kind != "" {
+		t.Fatalf("old-server trace returned a populated tree (%+v)", hop)
 	}
 }
 

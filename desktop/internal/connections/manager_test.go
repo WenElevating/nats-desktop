@@ -488,6 +488,31 @@ func TestConnAccessorLocalServer(t *testing.T) {
 	}
 }
 
+// TestJSParams covers the JetStream handle parameters accessor across the
+// lifecycle: ok=false before connect, the saved context's JSDomain/JSAPIPrefix
+// while connected, ok=false again after disconnect.
+func TestJSParams(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	m, rec, store := newRecordingManager(t) // connections 既有助手（manager_test.go:67）：(*Manager, *eventRecorder, *Store)
+	if _, _, ok := m.JSParams(); ok {
+		t.Fatal("no params before connect")
+	}
+	saveContext(t, store, "demo", url, func(f *ContextForm) { f.JSDomain = "HUB" })
+	if err := m.Connect(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, rec, StateConnected, 5*time.Second)
+	domain, prefix, ok := m.JSParams()
+	if !ok || domain != "HUB" || prefix != "" {
+		t.Fatalf("got (%q,%q,%v)", domain, prefix, ok)
+	}
+	m.Disconnect()
+	waitForState(t, rec, StateDisconnected, 5*time.Second)
+	if _, _, ok := m.JSParams(); ok {
+		t.Fatal("params must be unavailable after disconnect")
+	}
+}
+
 // freePort asks the OS for a currently unused TCP port.
 func freePort(t *testing.T) int {
 	t.Helper()

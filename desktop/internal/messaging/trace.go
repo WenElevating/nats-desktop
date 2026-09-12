@@ -6,24 +6,24 @@
 // unfolds Ingress/SubjectMapping/ServiceImports/StreamExports/JetStream/
 // Egresses into a frontend-friendly TraceHop tree that mirrors the structure
 // natscli's `nats trace` renders (cli/trace_command.go renderTrace). The
-// server version gate mirrors natscli's util.ServerMinVersion, which reads the
-// INFO-protocol ConnectedServerVersion available to every client — no $SYS or
-// monitor endpoint needed. Payload content is never included in returned
-// error strings (spec §13.3).
+// server version gate (natsver.ServerAtLeast, mirroring natscli's
+// util.ServerMinVersion) reads the INFO-protocol ConnectedServerVersion
+// available to every client — no $SYS or monitor endpoint needed. Payload
+// content is never included in returned error strings (spec §13.3).
 
 package messaging
 
 import (
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/nats-io/jsm.go"
 	"github.com/nats-io/jsm.go/api/server/tracing"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+
+	"github.com/WenElevating/nats-desktop/desktop/internal/natsver"
 )
 
 // ErrTraceOldServer is returned when the connected server predates the 2.11
@@ -56,44 +56,6 @@ type TraceHop struct {
 	Children []TraceHop `json:"children,omitempty"`
 }
 
-// semVerRe and versionComponents mirror natscli internal/util's semver
-// parsing (reimplemented: that package is internal to the natscli module).
-var semVerRe = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
-
-func versionComponents(version string) (major, minor, patch int, err error) {
-	m := semVerRe.FindStringSubmatch(version)
-	if m == nil {
-		return 0, 0, 0, errors.New("invalid semver")
-	}
-	major, err = strconv.Atoi(m[1])
-	if err != nil {
-		return -1, -1, -1, err
-	}
-	if m[2] != "" {
-		minor, err = strconv.Atoi(m[2])
-		if err != nil {
-			return -1, -1, -1, err
-		}
-	}
-	if m[3] != "" {
-		patch, err = strconv.Atoi(m[3])
-		if err != nil {
-			return -1, -1, -1, err
-		}
-	}
-	return major, minor, patch, nil
-}
-
-// serverVersionAtLeast reports whether the version string meets the given
-// minimum (mirror of natscli util.VersionIsAtLeast).
-func serverVersionAtLeast(version string, major, minor, patch int) bool {
-	smajor, sminor, spatch, _ := versionComponents(version)
-	if smajor < major || (smajor == major && sminor < minor) || (smajor == major && sminor == minor && spatch < patch) {
-		return false
-	}
-	return true
-}
-
 // Trace sends one probe message per f and returns the unfolded trace tree. A
 // nil conn yields ErrNotConnected and an oversize payload ErrPayloadTooLarge —
 // both before any network side effect. As in natscli, an ErrTimeout with a
@@ -105,7 +67,7 @@ func Trace(nc *nats.Conn, f TraceForm) (TraceHop, error) {
 	if len(f.Payload) > MaxPayload {
 		return TraceHop{}, ErrPayloadTooLarge
 	}
-	if !serverVersionAtLeast(nc.ConnectedServerVersion(), traceMinVersion[0], traceMinVersion[1], traceMinVersion[2]) {
+	if ok, err := natsver.ServerAtLeast(nc.ConnectedServerVersion(), traceMinVersion[0], traceMinVersion[1], traceMinVersion[2]); err != nil || !ok {
 		return TraceHop{}, ErrTraceOldServer
 	}
 
