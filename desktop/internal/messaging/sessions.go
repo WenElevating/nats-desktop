@@ -25,9 +25,11 @@
 // per subscription, so emissions of a session are ordered by Seq): assemble
 // MsgOut (seq from an atomic counter starting at 1) -> rate.Inc -> under the
 // session mutex: total++ and ring.Add (ring scrolls whether paused or not) ->
-// outside the session mutex, only when not paused: emitted++ and
-// pusher.Add -> session:msgs. Payload content is never logged (spec §13.3);
-// only subject/size/seq/counters reach the logger.
+// outside the session mutex, only when not paused: emitted++, pusher.Add ->
+// session:msgs, and throttle.notify() -> session:state coalesced to <=250ms
+// (plus one quiet-period refresh so a non-zero rate decays to 0 on screen).
+// Payload content is never logged (spec §13.3); only subject/size/seq/counters
+// reach the logger.
 
 package messaging
 
@@ -447,7 +449,10 @@ func (s *session) handle(m *nats.Msg) {
 
 // deliver runs the common per-receipt path: rate accounting, then under the
 // session mutex total++ and ring.Add (the ring scrolls whether paused or not),
-// then outside the mutex, only when not paused: emitted++ and pusher.Add.
+// then outside the mutex, only when not paused: emitted++ and pusher.Add, and
+// finally a throttled session:state notification (spec §6.4: 每次状态/计数变化
+// 节流 250ms 发 EventSessionState). The JS path (handleJS in jsposition.go)
+// shares this machinery, so JS sessions get identical state-event semantics.
 func (s *session) deliver(out MsgOut) {
 	s.rate.Inc()
 
@@ -464,6 +469,12 @@ func (s *session) deliver(out MsgOut) {
 	if !paused {
 		s.emitted.Add(1)
 		s.pusher.Add(out) // emits (realtime: synchronously) WITHOUT s.mu held
+		// Counter change -> coalesced state event. Must run WITHOUT s.mu held:
+		// notify's leading edge fires synchronously and snapshot() takes s.mu
+		// (calling notify under s.mu would self-deadlock). Paused receipts do
+		// not notify: the frozen display is unchanged by design (AC-006), so
+		// an event would only repeat the Pause snapshot.
+		s.throttle.notify()
 	}
 }
 
@@ -683,11 +694,23 @@ func (s *session) computeSnapshotLocked() SessionState {
 
 // --- state throttle -------------------------------------------------------------
 
+// rateDecayRefreshDelay is the quiet-period refresh delay: after an emission
+// whose snapshot still showed a non-zero rate on a running session, exactly
+// ONE additional emission is scheduled this much later so the UI sees the rate
+// decay to ~0 once receipts stop (AC-007: 注入结束后速率回落为 0). The rate
+// window is 1s, so a refresh 1.5s after the last non-zero snapshot always
+// reads 0 and the chain terminates by itself — no persistent ticker.
+const rateDecayRefreshDelay = 1500 * time.Millisecond
+
 // stateThrottle coalesces session:state emissions to at most one per interval:
 // a leading emission fires immediately, further notifications within the
 // interval schedule exactly one trailing emission, so the final state always
-// lands (e.g. closed). fire releases the throttle mutex before snapshotting,
-// so snapshot may take the session mutex without lock inversion.
+// lands (e.g. closed). Receipts call notify from the hot path.
+//
+// Lock ordering: fire ALWAYS releases t.mu before calling snapshot (which
+// takes the session mutex), so notify/fireNow are safe to call after the
+// caller released s.mu — but never with s.mu held, because the leading edge
+// fires synchronously and would self-deadlock on snapshot's s.mu.
 type stateThrottle struct {
 	interval time.Duration
 	snapshot func() SessionState
@@ -695,7 +718,8 @@ type stateThrottle struct {
 
 	mu    sync.Mutex
 	last  time.Time
-	timer *time.Timer
+	timer *time.Timer // trailing-edge coalescing timer
+	decay *time.Timer // one-shot quiet-period rate-decay refresh
 }
 
 func newStateThrottle(interval time.Duration, snapshot func() SessionState, emit func(name string, data any)) *stateThrottle {
@@ -725,20 +749,52 @@ func (t *stateThrottle) notify() {
 	t.mu.Unlock()
 }
 
-// fireNow cancels any pending trailing emission and emits the current state
-// immediately (used for terminal transitions such as closed).
+// fireNow cancels any pending trailing emission and the decay refresh, and
+// emits the current state immediately (used for terminal transitions such as
+// closed — no refresh may follow a terminal snapshot).
 func (t *stateThrottle) fireNow() {
 	t.mu.Lock()
 	if t.timer != nil {
 		t.timer.Stop()
 		t.timer = nil
 	}
+	if t.decay != nil {
+		t.decay.Stop()
+		t.decay = nil
+	}
 	t.last = time.Now()
 	t.mu.Unlock()
 	t.fire()
 }
 
+// fire emits the current state and, when that snapshot still showed a
+// non-zero rate on a running session, arms the one-shot decay refresh.
 func (t *stateThrottle) fire() {
 	st := t.snapshot() // takes the session mutex; t.mu must NOT be held here
 	t.emit(EventSessionState, st)
+	t.armDecay(st)
+}
+
+// armDecay schedules the single quiet-period refresh emission (see
+// rateDecayRefreshDelay). Paused snapshots carry rate 0 and closed sessions
+// are terminal, so neither re-arms; with receipts stopped the refreshed
+// snapshot reads 0 and the chain stops (with receipts continuing, the normal
+// notify path dominates anyway).
+func (t *stateThrottle) armDecay(st SessionState) {
+	if st.RateMsgS <= 0 || st.State != SessionRunning {
+		return
+	}
+	t.mu.Lock()
+	if t.decay == nil {
+		t.decay = time.AfterFunc(rateDecayRefreshDelay, t.decayFire)
+	}
+	t.mu.Unlock()
+}
+
+func (t *stateThrottle) decayFire() {
+	t.mu.Lock()
+	t.decay = nil
+	t.last = time.Now() // the refresh counts as an emission for the 250ms cadence
+	t.mu.Unlock()
+	t.fire()
 }

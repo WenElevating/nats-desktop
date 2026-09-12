@@ -135,6 +135,17 @@ func (r *emitRecorder) sessionEventCount() int {
 	return n
 }
 
+// lastState returns the most recent session:state payload emitted for id.
+func (r *emitRecorder) lastState(id string) (SessionState, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	evs := r.states[id]
+	if len(evs) == 0 {
+		return SessionState{}, false
+	}
+	return evs[len(evs)-1], true
+}
+
 // --- fixtures -----------------------------------------------------------------
 
 // newSessionStack builds a connected connections.Manager plus a
@@ -974,6 +985,94 @@ func TestSessionTypesJSONContract(t *testing.T) {
 	}
 }
 
+// --- state-event regressions (GUI-smoke Critical fix round 1) ------------------
+
+// scenarioReceiptsEmitStateEvents: receipts must produce coalesced
+// session:state events (spec §6.4: 每次状态/计数变化节流 250ms). Regression for
+// the GUI smoke finding where the rate/total chip stayed at the create-time
+// snapshot "0 msg/s 共 0 条" because deliver() never notified the throttle.
+func scenarioReceiptsEmitStateEvents(t *testing.T, url string) {
+	t.Helper()
+	_, sm, rec := newSessionStack(t, url, 10000, PushRealtime)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "stateevt." + uniqueSuffix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Total != 0 {
+		t.Fatalf("create-time Total = %d, want 0", st.Total)
+	}
+
+	nc := connect(t, url)
+	published := burstPublish(t, nc, st.Subject, 20, 5, 10*time.Millisecond, []byte("x"))
+
+	// A session:state carrying the received total must arrive within ~1s of
+	// the receipts (leading edge fires immediately; 250ms coalesce at worst).
+	deadline := time.Now().Add(time.Second)
+	for {
+		if last, ok := rec.lastState(st.ID); ok && last.Total >= int64(published) {
+			return
+		}
+		if time.Now().After(deadline) {
+			last, _ := rec.lastState(st.ID)
+			t.Fatalf("no session:state with Total >= %d within 1s (last: %+v) — receipts must notify the throttle", published, last)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// scenarioRateDecaysToZero: after receipts stop, the throttle's quiet-period
+// refresh must deliver a final state event whose rate has decayed to ~0 while
+// keeping the full total (AC-007: 注入结束后速率回落为 0).
+func scenarioRateDecaysToZero(t *testing.T, url string) {
+	t.Helper()
+	_, sm, rec := newSessionStack(t, url, 10000, PushRealtime)
+
+	st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: "decay." + uniqueSuffix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := connect(t, url)
+	published := burstPublish(t, nc, st.Subject, 200, 50, 10*time.Millisecond, []byte("x"))
+
+	// The rate must actually have risen (guards against passing because the
+	// rate never moved): the sample right after the burst sits inside the 1s
+	// rate window, well before any decay.
+	sample := waitSessionTotal(t, sm, st.ID, int64(published), 10*time.Second)
+	if sample.RateMsgS <= 1 {
+		t.Fatalf("RateMsgS = %v right after a %d-message burst, want > 1 (rate must rise before it can decay)", sample.RateMsgS, published)
+	}
+
+	// Within ~1.5s of the last non-zero snapshot the decay refresh must emit a
+	// state event with Total intact and the rate decayed below 1 msg/s.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if last, ok := rec.lastState(st.ID); ok && last.Total == int64(published) && last.RateMsgS < 1 {
+			// It must stay decayed: no later event may raise the rate again.
+			time.Sleep(300 * time.Millisecond)
+			if last, ok := rec.lastState(st.ID); !ok || last.RateMsgS >= 1 || last.Total != int64(published) {
+				t.Fatalf("decayed state did not hold: %+v (ok=%v)", last, ok)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			last, _ := rec.lastState(st.ID)
+			t.Fatalf("no decayed session:state (Total==%d, Rate<1) within 3s; last: %+v (quiet-period refresh missing?)", published, last)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestReceiptsEmitStateEvents / TestRateDecaysToZero plus their LocalServer
+// variants cover the receipt->state-event contract on both fixtures.
+func TestReceiptsEmitStateEvents(t *testing.T) {
+	scenarioReceiptsEmitStateEvents(t, testutil.StartJSServer(t))
+}
+
+func TestRateDecaysToZeroInStateEvents(t *testing.T) {
+	scenarioRateDecaysToZero(t, testutil.StartJSServer(t))
+}
+
 // --- real local nats-server variants (M2 mandate) -------------------------------
 
 func TestSessionRealtimeReceivesLocalServer(t *testing.T) {
@@ -1001,6 +1100,16 @@ func TestSessionBatchModeLocalServer(t *testing.T) {
 func TestSessionClearLocalServer(t *testing.T) {
 	requireLocalServer(t)
 	scenarioSessionClear(t, localServerURL)
+}
+
+func TestReceiptsEmitStateEventsLocalServer(t *testing.T) {
+	requireLocalServer(t)
+	scenarioReceiptsEmitStateEvents(t, localServerURL)
+}
+
+func TestRateDecaysToZeroLocalServer(t *testing.T) {
+	requireLocalServer(t)
+	scenarioRateDecaysToZero(t, localServerURL)
 }
 
 // --- reconnect (inline restartable server; can't restart the shared one) -------
