@@ -189,7 +189,11 @@ func (m *Manager) JSParams() (domain, apiPrefix string, ok bool) {
 	}
 	c, err := m.reg.Load(context.Background(), name)
 	if err != nil {
-		return "", "", true // connected: fall back to defaults, load errors surface in ops
+		// Connected: fall back to default JetStream routing; the load
+		// failure surfaces in the next JetStream operation. WARN keeps
+		// the misconfiguration diagnosable (spec §13.3).
+		m.log.Warn("jetstream context load failed; using default JS routing", "context", name, "err", err)
+		return "", "", true
 	}
 	return c.JSDomain(), c.JSAPIPrefix(), true
 }

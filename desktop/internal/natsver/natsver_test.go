@@ -15,6 +15,8 @@ func TestServerAtLeast(t *testing.T) {
 		{"2.10.24", 2, 11, 0, false},
 		{"2.11.0", 2, 11, 1, false},
 		{"v2.9.1", 2, 10, 0, false},
+		{"3.0.0", 2, 11, 0, true},
+		{"v2.11.0", 2, 11, 0, true},
 	}
 	for _, c := range cases {
 		got, err := ServerAtLeast(c.version, c.maj, c.min, c.pat)
