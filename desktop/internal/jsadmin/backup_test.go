@@ -125,6 +125,25 @@ func TestRestoreTargetExists(t *testing.T) {
 	}
 }
 
+// hasBytesRunning 返回事件流中是否已出现携带字节计数的 running 事件：
+// SnapshotNotify 仅在快照数据真正流入后才触发，此刻快照订阅与接收循环必已
+// 建立并阻塞在接收上——这是断连演练的正确触发点（watchdog 覆盖的前提）。
+func hasBytesRunning(events emitLog, stream string) bool {
+	for _, e := range events() {
+		if e.name != EventStreamBackup {
+			continue
+		}
+		p, ok := e.data.(BackupProgress)
+		if !ok || p.Stream != stream || p.Direction != "backup" {
+			continue
+		}
+		if p.Phase == "running" && p.BytesDone > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBackupFailsCleanlyForMissingStream(t *testing.T) {
 	svc := newAdmin(t, testutil.StartJSServer(t))
 	events := captureEmits(t, svc)
@@ -212,8 +231,12 @@ func publishBig(t *testing.T, svc *JetAdminService, subject string, n int) {
 }
 
 // disconnectBackupAttempt 执行一轮断连演练：独立连接上建流 + 注入 200k 条 +
-// 启动备份，首条 backup 事件到达即断连（初始 running 事件先于快照调用发出，
-// 此刻服务端迭代必然远未结束），等待备份调用有限时返回。
+// 启动备份，首条「携带字节计数」的 running 事件到达即断连，等待备份调用
+// 有限时返回。初始 running 事件先于 SnapshotToDirectory 订阅发出（backup.go
+// emit 顺序），在它到达时断连只会命中普通错误路径（backupFailed）；而
+// SnapshotNotify 回调仅在数据真正流入后触发——此刻订阅与接收循环必已建立
+// 且静默停摆风险真实存在，断连才能真正走到 conn-close watchdog（backup.go
+// watchConnClose → droppedIncomplete，§6.6「备份中断」deviation）。
 func disconnectBackupAttempt(t *testing.T, attempt int) (CallResult, []string) {
 	t.Helper()
 	nc := testutil.ConnectLocalServer(t)
@@ -240,10 +263,11 @@ func disconnectBackupAttempt(t *testing.T, attempt int) (CallResult, []string) {
 	go func() {
 		done <- attemptResult{svc.BackupStream(name, dir, false)}
 	}()
-	// 首条 backup 事件（初始 running）一到立即断连
-	deadline := time.Now().Add(5 * time.Second)
+	// 首条携带字节的 running 事件一到立即断连；超时兜底仍断连（外层
+	// weak-pass/backstop 逻辑兜底，绝不无限等待）
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(eventPhases(events, name, "backup")) > 0 {
+		if hasBytesRunning(events, name) {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -251,8 +275,14 @@ func disconnectBackupAttempt(t *testing.T, attempt int) (CallResult, []string) {
 	nc.Close()
 	select {
 	case r := <-done:
-		t.Logf("attempt %d: res=%+v phases=%v", attempt, r.res, eventPhases(events, name, "backup"))
-		return r.res, eventPhases(events, name, "backup")
+		// 数据真正流入后 phases 可达千余条，只记首尾避免日志洪水
+		phases := eventPhases(events, name, "backup")
+		head, tail := phases, phases
+		if len(phases) > 6 {
+			head, tail = phases[:3], phases[len(phases)-3:]
+		}
+		t.Logf("attempt %d: res=%+v phases=%d head=%v tail=%v", attempt, r.res, len(phases), head, tail)
+		return r.res, phases
 	case <-time.After(60 * time.Second):
 		t.Fatalf("attempt %d: backup did not return within 60s after disconnect: %+v", attempt, eventPhases(events, name, "backup"))
 		return CallResult{}, nil
@@ -290,5 +320,74 @@ func TestBackupDisconnectMarksIncompleteLocalServer(t *testing.T) {
 	}
 	if weakPass {
 		t.Logf("PENDING-MANUAL: disconnect timing did not converge to last-phase=incomplete in %d attempts (phases=%v, res=%+v); weaker guard (never complete) held", attempts, lastPhases, lastRes)
+	}
+}
+
+// TestBackupRestoreBusyRejected：backupMu 占用期间 BackupStream 与 RestoreBackup
+// 一律 CodeValidation + ErrBackupBusy 原文（CompareAndSwap 门在任何 handles/emit
+// 之前，spec §6.6 互斥行）。同包测试直接 Store(1) 预置占用；复位后真实调用
+// 必须恢复可用，证明门未卡死。
+func TestBackupRestoreBusyRejected(t *testing.T) {
+	svc := seedStream(t, testutil.StartJSServer(t), "BUSY", 5)
+	events := captureEmits(t, svc)
+	svc.backupMu.Store(1) // 模拟并发中的备份/恢复（service.go 互斥约定）
+	res := svc.BackupStream("BUSY", t.TempDir(), false)
+	if res.ErrorCode != CodeValidation || !strings.Contains(res.Error, ErrBackupBusy.Error()) {
+		t.Fatalf("busy backup must be CodeValidation/ErrBackupBusy, got %+v", res)
+	}
+	rres := svc.RestoreBackup(t.TempDir(), false)
+	if rres.ErrorCode != CodeValidation || !strings.Contains(rres.Error, ErrBackupBusy.Error()) {
+		t.Fatalf("busy restore must be CodeValidation/ErrBackupBusy, got %+v", rres)
+	}
+	// 互斥门先于一切 emit：占用拒绝不得产生任何进度事件
+	if n := len(events()); n != 0 {
+		t.Fatalf("busy rejection emitted %d events: %+v", n, events())
+	}
+	// 复位后真实调用可用（CompareAndSwap(0,1) 重新成功）
+	svc.backupMu.Store(0)
+	if res := svc.BackupStream("BUSY", t.TempDir(), false); !res.Ok() {
+		t.Fatalf("backup after busy reset: %+v", res)
+	}
+	if phases := eventPhases(events, "BUSY", "backup"); len(phases) == 0 || phases[len(phases)-1] != "complete" {
+		t.Fatalf("post-reset backup phases: %v", phases)
+	}
+}
+
+// TestRestoreMalformedBackupJSON：backup.json 缺失 / 截断 JSON / name 为空 →
+// 全部 CodeValidation「invalid backup directory」类错误（readBackupName 校验
+// 先于 handles 与任何 emit，backup.go RestoreBackup 顺序），不得产生
+// stream:backup 事件，也不得在服务器上创建流。
+func TestRestoreMalformedBackupJSON(t *testing.T) {
+	svc := newAdmin(t, testutil.StartJSServer(t))
+	cases := []struct {
+		name string
+		blob string // "" = 保持空目录（无 backup.json）
+	}{
+		{name: "missing backup.json"},
+		{name: "truncated json", blob: `{"config":`},
+		{name: "empty name", blob: `{"config":{"name":""}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.blob != "" {
+				if err := os.WriteFile(filepath.Join(dir, "backup.json"), []byte(tc.blob), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			events := captureEmits(t, svc)
+			res := svc.RestoreBackup(dir, false)
+			if res.ErrorCode != CodeValidation || !strings.Contains(res.Error, "invalid backup directory") {
+				t.Fatalf("malformed backup dir must be CodeValidation/invalid backup directory, got %+v", res)
+			}
+			// 校验先于任何 emit：不得有 stream:backup 事件
+			if n := len(events()); n != 0 {
+				t.Fatalf("validation failure emitted %d events: %+v", n, events())
+			}
+		})
+	}
+	// 三种用例均未触达服务器：全新嵌入式服务器上不得出现任何流
+	if ls := svc.ListStreams(); !ls.Ok() || len(ls.Streams) != 0 {
+		t.Fatalf("malformed restore must not create streams, got ok=%v n=%d err=%s", ls.Ok(), len(ls.Streams), ls.Error)
 	}
 }
