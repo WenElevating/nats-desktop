@@ -26,9 +26,15 @@ func defaultDiskFree(path string) (uint64, error) {
 
 // OpenInFileManager 在资源管理器中定位并选中 path（§6.9「打开所在目录入口」）：
 // explorer /select——零新依赖。explorer 进程异步启动，失败仅为本进程侧错误。
+// path 可能由前端以下载目录 + 服务器可控对象名拼出：含 ".." 段的形式会在
+// explorer /select 前被拒（transfer.go hasDotDotSegment 同款穿越检测，
+// ErrUnsafeName 同款哨兵），保证定位目标不越过用户所选目录。
 func (s *BucketService) OpenInFileManager(path string) CallResult {
 	if path == "" {
 		return fail(CodeValidation, "path must not be empty")
+	}
+	if hasDotDotSegment(path) {
+		return fail(CodeValidation, ErrUnsafeName.Error())
 	}
 	if err := exec.Command("explorer", "/select,"+filepath.Clean(path)).Start(); err != nil {
 		return fail(CodeServer, err.Error())

@@ -2,10 +2,13 @@ package buckets
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -303,5 +306,159 @@ func TestTransferBusyRejected(t *testing.T) {
 	}
 	if res := svc.DownloadObject("B", "tiny.bin", t.TempDir()); !res.Ok() {
 		t.Fatalf("download after reset: %+v", res)
+	}
+}
+
+// flakyConn 模拟断连竞态（终审 finding 1）：首次 Conn() 返回真实连接（js()
+// 构建句柄），之后全部返回 nil（Manager.Conn 的 state≠connected 语义）——
+// 钉住「round-trip 后二次取连接」路径必须走 nil 守卫返回 not_connected，
+// 而不是把 nil 递进 watchdog goroutine 造成未恢复 panic（进程静默死亡路径）。
+type flakyConn struct {
+	nc   *nats.Conn
+	used atomic.Bool
+}
+
+func (c *flakyConn) Conn() *nats.Conn {
+	if c.used.CompareAndSwap(false, true) {
+		return c.nc
+	}
+	return nil
+}
+
+func (c *flakyConn) JSParams() (string, string, bool) { return "", "", true }
+
+// TestTransferNilConnAfterRoundTrip 强制 nil 路径：js() 的 Conn() 成功、
+// ObjectStore(ctx) 往返（≤timeout）成功（桶已由真实连接建好）之后，二次
+// Conn() 返回 nil → Upload/Download 必须返回 not_connected。修复前此处把
+// nil 递进 watchdog，首个 50ms tick 上 nc.IsClosed() nil-deref panic 直接
+// 杀死整个测试进程。
+func TestTransferNilConnAfterRoundTrip(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	nc, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { nc.Close() })
+	seed := NewBucketService(&connStub{nc: nc}, nil, nil, "")
+	if res := seed.CreateObjBucket(ObjBucketForm{Name: "NILC", Replicas: 1}); !res.Ok() {
+		t.Fatalf("create bucket: %+v", res)
+	}
+	src := filepath.Join(t.TempDir(), "n.bin")
+	if err := os.WriteFile(src, []byte("nil conn"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		call func(*BucketService) CallResult
+	}{
+		{"upload", func(svc *BucketService) CallResult { return svc.UploadObject("NILC", src, "") }},
+		{"download", func(svc *BucketService) CallResult { return svc.DownloadObject("NILC", "n.bin", t.TempDir()) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// 每个子用例独立 stub（首个 Conn() 消耗在 js()，第二个才是被测的 nil）
+			svc := NewBucketService(&flakyConn{nc: nc}, nil, nil, "")
+			res := tc.call(svc)
+			if res.Ok() || res.ErrorCode != CodeNotConnected || res.Error != "not connected" {
+				t.Fatalf("nil conn after round trip must be not_connected, got %+v", res)
+			}
+		})
+	}
+}
+
+// TestWatchConnCloseNilConnDefensive 钉住 watchdog 自身的防御分支：nil 连接
+// 绝不 close(dropped)（也不得 panic），ctx 取消后正常退出（jsadmin backup.go
+// watchConnClose 同款分支，行为在此固化）。
+func TestWatchConnCloseNilConnDefensive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dropped := make(chan struct{})
+	done := make(chan struct{})
+	go func() { watchConnClose(ctx, cancel, nil, dropped); close(done) }()
+	select {
+	case <-dropped:
+		t.Fatal("nil conn must not close dropped")
+	case <-time.After(200 * time.Millisecond): // ≥4 个 tick：nil 会在首个 tick 触发，未触发即守卫生效
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watchdog did not exit after cancel")
+	}
+}
+
+// TestDownloadRejectsUnsafeNames 路径穿越防御（终审 finding 2）：服务器可控
+// 对象名（nats.go encodeName base64 落服务器，任意形式合法）中的 ".." 段 /
+// 绝对·UNC / 盘符形式在创建任何文件前被拒（CodeValidation + ErrUnsafeName），
+// 目标目录零副作用；纯函数真值表钉住判定边界；合法 "/" 嵌套名照常下载
+//（含中间目录补建，字节一致 + digest 匹配）。
+func TestDownloadRejectsUnsafeNames(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	svc := newSvc(t, url)
+	if res := svc.CreateObjBucket(ObjBucketForm{Name: "SAFE", Replicas: 1}); !res.Ok() {
+		t.Fatalf("create: %+v", res)
+	}
+	for _, name := range []string{`..\..\evil.exe`, `../../x`, `C:\evil`, `C:evil`, `/abs`, `a/../../out`, `..`} {
+		dir := t.TempDir()
+		res := svc.DownloadObject("SAFE", name, dir)
+		if res.Ok() || res.ErrorCode != CodeValidation || res.Error != ErrUnsafeName.Error() {
+			t.Fatalf("name %q must be CodeValidation/ErrUnsafeName, got %+v", name, res)
+		}
+		if ents, err := os.ReadDir(dir); err != nil || len(ents) != 0 {
+			t.Fatalf("name %q: target dir must stay empty, got %v (err=%v)", name, ents, err)
+		}
+	}
+	// 纯函数真值表：常规与嵌套名放行，穿越/绝对/UNC/盘符全拒
+	for name, want := range map[string]bool{
+		"blob.bin": true, "a/b/c.txt": true, "a/b/../c.txt": false,
+		`\win`: false, `\\srv\share\x`: false, `D:\x`: false, `D:x`: false,
+		"..": false, "": false,
+	} {
+		if got := safeObjectName(name); got != want {
+			t.Fatalf("safeObjectName(%q)=%v want %v", name, got, want)
+		}
+	}
+	// 合法嵌套名仍可下载（rename 上传嵌套名 → 下载补建中间目录 → 字节一致）
+	src := filepath.Join(t.TempDir(), "leaf.txt")
+	if err := os.WriteFile(src, []byte("nested ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res := svc.UploadObject("SAFE", src, "a/b/c.txt"); !res.Ok() {
+		t.Fatalf("nested upload: %+v", res)
+	}
+	dst := t.TempDir()
+	if res := svc.DownloadObject("SAFE", "a/b/c.txt", dst); !res.Ok() {
+		t.Fatalf("nested download: %+v", res)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "a", "b", "c.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "nested ok" {
+		t.Fatalf("nested content: %q", got)
+	}
+}
+
+// TestOpenInFileManagerRejectsClimbingPath（终审 finding 2 的 OpenInFileManager
+// 腿）：path 可能由前端以 下载目录 + 服务器可控对象名 拼出，含 ".." 段的形式在
+// explorer /select 之前被拒（ErrUnsafeName 同款哨兵）。非 Windows 平台本就返回
+// platform validation 文案，仅断言非 Ok。
+func TestOpenInFileManagerRejectsClimbingPath(t *testing.T) {
+	svc := NewBucketService(&connStub{}, nil, nil, "")
+	sep := string(os.PathSeparator)
+	hostile := filepath.Join(t.TempDir(), "chosen") + sep + ".." + sep + ".." + sep + "evil.exe"
+	res := svc.OpenInFileManager(hostile)
+	if res.Ok() {
+		t.Fatal("climbing path must be rejected")
+	}
+	if runtime.GOOS == "windows" && (res.ErrorCode != CodeValidation || res.Error != ErrUnsafeName.Error()) {
+		t.Fatalf("windows climbing path: %+v", res)
+	}
+	// 常规绝对路径不被误拒（windows 下 explorer 异步启动，仅断言非校验拒绝）
+	if runtime.GOOS == "windows" {
+		normal := filepath.Join(t.TempDir(), "blob.bin")
+		if res := svc.OpenInFileManager(normal); res.ErrorCode == CodeValidation {
+			t.Fatalf("normal path must not be validation-rejected: %+v", res)
+		}
 	}
 }

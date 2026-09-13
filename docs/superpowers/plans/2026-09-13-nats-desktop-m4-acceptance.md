@@ -151,7 +151,7 @@
 | h | workqueue 提示 | **LIVE-PASS（常驻徽标）+ PENDING-MANUAL（报错 toast 腿）** | 注入器建 m4wq（WorkQueuePolicy，无 allow_direct）→ 流列表行呈现、详情 retention 徽标 `workqueue` 常驻显示。浏览器报错 toast 含 allow_direct 提示的实拍因详情页签点击与导航「消息」同名碰撞（方法注记-4）在时间盒内未打通 → PENDING-MANUAL，路径：流 → 点 m4wq 行 → 详情「消息」页签 → 浏览报错 → toast「workqueue 流浏览需服务器 allow_direct；nats stream edit 可开启」+ 头部常驻提示。自动化覆盖：streams-msgs 纯函数真值表 + 报错 toast 含 allow_direct + 非 workqueue 不提示（Task 9） |
 | i | 主题/语言回归 | **PASS** | 应用以持久化 dark + zh-CN 启动；全部冒烟页（KV/对象/流/各对话框/watch 面板/确认层）UIA 读值均为 zh-CN 文案、无英文硬编码泄漏（put/create/update/watch/Sealed 等为 locales 预期术语）；对全部 dump 树做 emoji 码位扫描（U+1F300–1FAFF / 2600–27BF / 2B00–2BFF / FE0F）→ **零命中**。像素级配色核对留人工（UIA 文本通道不可读色值） |
 
-冒烟小结：**5 行全 PASS（a/b/c/d/g/g 计 5）+ 3 行 LIVE+PENDING-MANUAL 混合（e/f/h，PENDING 腿均为锁屏不可驱动或同名碰撞，均附精确路径与自动化覆盖）+ 1 行 PASS（i）；即 PASS 6 / 混合 3 / 纯 PENDING 0**。全部 PENDING 腿给出精确点击路径供人工回填（§8）。
+冒烟小结：**5 行全 PASS（a/b/c/d/g 计 5）+ 3 行 LIVE+PENDING-MANUAL 混合（e/f/h，PENDING 腿均为锁屏不可驱动或同名碰撞，均附精确路径与自动化覆盖）+ 1 行 PASS（i）；即 PASS 6 / 混合 3 / 纯 PENDING 0**。全部 PENDING 腿给出精确点击路径供人工回填（§8）。
 
 ## 8. 回填区（人工走查后填写，与 M1/M2/M3 同构）
 

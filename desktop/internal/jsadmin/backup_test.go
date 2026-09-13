@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -411,5 +412,58 @@ func TestLogIncompleteMsgRestoreBranch(t *testing.T) {
 	}
 	if got := logIncompleteMsg("backup"); got != "backup incomplete: connection closed" {
 		t.Fatalf("backup wording wrong: %q", got)
+	}
+}
+
+// flakyConnStub 模拟断连竞态（终审 finding 1，buckets transfer_test 同款）：
+// 首次 Conn() 返回真实连接（resolveConn/handles() 构建句柄），之后全部返回
+// nil（Manager.Conn 的 state≠connected 语义）——钉住 round-trip 后二次取连接
+// 的路径必须走 nil 守卫返回 not_connected，而不是把 nil 递进 watchdog
+// goroutine 造成未恢复 panic（进程静默死亡路径）。jsadmin watchdog 自身的
+// nil 防御分支与 buckets 同款，行为在 buckets TestWatchConnCloseNilConnDefensive
+// 固化（代码逐字相同）。
+type flakyConnStub struct {
+	nc   *nats.Conn
+	used atomic.Bool
+}
+
+func (c *flakyConnStub) Conn() *nats.Conn {
+	if c.used.CompareAndSwap(false, true) {
+		return c.nc
+	}
+	return nil
+}
+
+func (c *flakyConnStub) JSParams() (string, string, bool) { return "", "", true }
+
+// TestBackupRestoreNilConnAfterRoundTrip 强制 nil 路径（BackupStream/
+// RestoreBackup 镜像）：handles() 的 Conn() 成功、LoadStream/IsKnownStream
+// 网络往返（≤timeout）之后，二次 Conn() 返回 nil → Backup/Restore 必须返回
+// not_connected。修复前此处把 nil 递进 watchdog，首个 50ms tick 上
+// nc.IsClosed() nil-deref panic 直接杀死整个测试进程。
+func TestBackupRestoreNilConnAfterRoundTrip(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	nc, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { nc.Close() })
+	seed := NewJetAdminService(&connStub{nc: nc}, nil, nil, "")
+	if res := seed.CreateStream(StreamForm{Name: "NILBK", Subjects: []string{"nilbk.>"}, Storage: "file", Retention: "limits", Replicas: 1}); !res.Ok() {
+		t.Fatalf("create stream: %+v", res)
+	}
+	// 备份：LoadStream 往返成功后二次 Conn() → nil
+	if res := NewJetAdminService(&flakyConnStub{nc: nc}, nil, nil, "").BackupStream("NILBK", t.TempDir(), false); res.Ok() || res.ErrorCode != CodeNotConnected || res.Error != "not connected" {
+		t.Fatalf("backup nil conn must be not_connected, got %+v", res)
+	}
+	// 恢复：IsKnownStream 往返成功后二次 Conn() → nil（backup.json 指向不存在的
+	// 流，known=false 直达取 nc 处）
+	dir := t.TempDir()
+	blob := `{"config":{"name":"NILBK2","subjects":["nilbk2.>"]}}`
+	if err := os.WriteFile(filepath.Join(dir, "backup.json"), []byte(blob), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res := NewJetAdminService(&flakyConnStub{nc: nc}, nil, nil, "").RestoreBackup(dir, false); res.Ok() || res.ErrorCode != CodeNotConnected || res.Error != "not connected" {
+		t.Fatalf("restore nil conn must be not_connected, got %+v", res)
 	}
 }

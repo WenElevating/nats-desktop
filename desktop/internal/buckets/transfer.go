@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +39,34 @@ const (
 // diskFree 是磁盘预检的可替换实现（测试 stub 点）：平台实现在 disk_windows.go
 //（GetDiskFreeSpaceEx），非 Windows 桩返回 0 = 未知（disk_other.go，不阻止）。
 var diskFree = defaultDiskFree
+
+// drivePrefixRe 匹配 Windows 盘符前缀（C:…）——服务器侧合法的盘绝对/盘相对
+// 形式，Join 进用户选择的下载目录绝非安全目标（safeObjectName）。
+var drivePrefixRe = regexp.MustCompile(`^[a-zA-Z]:`)
+
+// hasDotDotSegment 报告 s 是否含 ".." 路径段（两种分隔符均计）——filepath.Join
+// 会清洗 ".." 并向上爬出基准目录，这是服务器可控对象名构成的越界写路径
+//（DownloadObject / OpenInFileManager 共用的穿越检测核心）。
+func hasDotDotSegment(s string) bool {
+	for _, seg := range strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// safeObjectName 判定服务器可控的对象名能否安全地 Join 进用户选择的下载目录：
+// NATS 对象名在服务器侧 base64 落库（nats.go encodeName），任意形式（含 "/"
+// 嵌套与 ".."）皆合法；但 ".." 段、前导分隔符（绝对/UNC 形式）与盘符前缀会让
+// Join 爬出目录——一律拒绝（ErrUnsafeName，DownloadObject 在创建任何文件前
+// 调用）。合法的 "a/b/c.txt" 嵌套名放行。
+func safeObjectName(name string) bool {
+	if name == "" || name[0] == '/' || name[0] == '\\' || drivePrefixRe.MatchString(name) {
+		return false
+	}
+	return !hasDotDotSegment(name)
+}
 
 // progressThrottle 是单传输的 running 事件节流器（非并发安全——仅在 Put 读循环
 // / io.Copy 的单 goroutine 回调路径使用）。
@@ -120,6 +150,13 @@ func watchConnClose(ctx context.Context, cancel context.CancelFunc, nc *nats.Con
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if nc == nil {
+				// 防御：调用方取 nc 与 round-trip 之间存在断连竞态（Manager.Conn
+				// 的 state≠connected 返回 nil），nil 上 IsClosed 必 panic——
+				// watchdog 在未恢复的 goroutine 里 panic 即进程静默死亡；调用方
+				// 的 nil 守卫已先行返回 not_connected，这里直接退出即可。
+				return
+			}
 			if nc.IsClosed() {
 				close(dropped)
 				cancel()
@@ -213,7 +250,13 @@ func (s *BucketService) UploadObject(bucket, path, rename string) CallResult {
 	}
 	// 断线监控：Put 是长时操作，服务器无响应时 per-publish 超时兜底，但连接
 	// 关闭必须立即中断（取消 Put 的读取循环），watchdog 检测到即取消传输 ctx。
+	// 此刻距 js() 已隔一次网络往返（ObjectStore ≤timeout）——期间断连则
+	// Manager.Conn() 返回 nil，递给 watchdog 会在其 goroutine 里 nil-deref
+	// panic（进程静默死亡路径），先显式返回 not_connected。
 	nc := s.mgr.Conn()
+	if nc == nil {
+		return fail(CodeNotConnected, "not connected")
+	}
 	pctx, pcancel := context.WithCancel(context.Background())
 	defer pcancel()
 	dropped := make(chan struct{})
@@ -267,9 +310,12 @@ func (s *BucketService) UploadObject(bucket, path, rename string) CallResult {
 	return CallResult{}
 }
 
-// DownloadObject 下载桶内对象到目录（§6.9）：磁盘预检（free>0 且 < info.Size
+// DownloadObject 下载桶内对象到目录（§6.9）：对象名安全守卫（服务器可控名
+// base64 落库任意合法，".." 段/绝对/盘符形式在创建任何文件前拒绝——ErrUnsafeName）
+// → 磁盘预检（free>0 且 < info.Size
 // 才拒绝——0 = 未知平台/查询失败，绝不阻止）→ os.Get（info 返回时即就绪，取
-// bytes_total/digest）→ 覆盖写（已存在先删，Windows rename 语义）→ io.Copy
+// bytes_total/digest）→ 覆盖写（嵌套名补建中间目录；已存在先删，Windows
+// rename 语义）→ io.Copy
 //（countingWriter 节流 running + TeeReader 进 sha256）→ 摘要复核。摘要不匹配
 //（含 nats.go Read 在 EOF 的内建 ErrDigestMismatch——tee 是第二道双保险）→
 // phase=incomplete + error「digest mismatch」，文件保留供人工比对；匹配 →
@@ -287,6 +333,13 @@ func (s *BucketService) DownloadObject(bucket, name, dir string) CallResult {
 	if dir == "" {
 		return fail(CodeValidation, "dir must not be empty")
 	}
+	// 服务器可控对象名的越界写防御（ErrUnsafeName）：任何文件创建之前先拒绝
+	// ".." 段 / 绝对·UNC 形式 / 盘符名——filepath.Join 会清洗 ".." 向上爬出用户
+	// 选择的目录；合法的 "a/b" 嵌套名放行。
+	if !safeObjectName(name) {
+		s.log.Warn("download blocked: unsafe object name", "bucket", bucket, "object", name)
+		return fail(CodeValidation, ErrUnsafeName.Error())
+	}
 	js, res := s.js()
 	if !res.Ok() {
 		return res
@@ -298,8 +351,13 @@ func (s *BucketService) DownloadObject(bucket, name, dir string) CallResult {
 		return ClassifyKvError(err) // ErrBucketNotFound → not_found
 	}
 	// 断线监控：Get/Read 是长时操作，连接关闭必须立即中断（取消后 Read 返回
-	// 错误），watchdog 检测到即取消传输 ctx。
+	// 错误），watchdog 检测到即取消传输 ctx。此刻距 js() 已隔一次网络往返
+	//（ObjectStore ≤timeout）——期间断连则 Manager.Conn() 返回 nil，递给
+	// watchdog 会在其 goroutine 里 nil-deref panic，先显式返回 not_connected。
 	nc := s.mgr.Conn()
+	if nc == nil {
+		return fail(CodeNotConnected, "not connected")
+	}
 	dctx, dcancel := context.WithCancel(context.Background())
 	defer dcancel()
 	dropped := make(chan struct{})
@@ -329,6 +387,11 @@ func (s *BucketService) DownloadObject(bucket, name, dir string) CallResult {
 		BytesTotal: info.Size,
 	}
 	target := filepath.Join(dir, name)
+	// 合法嵌套名（a/b/c.txt）的中间目录补建：target 已过 safeObjectName 守卫，
+	// MkdirAll 不可能爬出 dir。
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fail(CodeValidation, err.Error()) // 本地目录问题（缺失/权限）
+	}
 	_ = os.Remove(target) // 已存在 → 覆盖前先删（Windows rename 语义）
 	f, err := os.Create(target)
 	if err != nil {

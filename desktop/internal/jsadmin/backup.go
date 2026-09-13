@@ -72,6 +72,14 @@ func watchConnClose(ctx context.Context, cancel context.CancelFunc, nc *nats.Con
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if nc == nil {
+				// 防御：调用方取 nc 与 round-trip 之间存在断连竞态（Manager.Conn
+				// 的 state≠connected 返回 nil），nil 上 IsClosed 必 panic——
+				// watchdog 在未恢复的 goroutine 里 panic 即进程静默死亡；调用方
+				// 的 nil 守卫已先行返回 not_connected，这里直接退出即可
+				//（buckets/transfer.go 同款防御分支）。
+				return
+			}
 			if nc.IsClosed() {
 				close(dropped)
 				cancel()
@@ -125,8 +133,14 @@ func (s *JetAdminService) BackupStream(stream, dir string, includeConsumers bool
 	}
 	// 断线监控：jsm 快照是纯接收端——连接关闭后订阅静默停摆，jsm 既不上报
 	// 错误也不超时（context.Background() 会永久挂起，无法落实 §6.6「停止
-	// 备份」）。监控 goroutine 检测到断线即取消快照 ctx。
+	// 备份」）。监控 goroutine 检测到断线即取消快照 ctx。此刻距 handles() 已
+	// 隔一次网络往返（LoadStream ≤timeout）——期间断连则 Manager.Conn() 返回
+	// nil，递给 watchdog 会在其 goroutine 里 nil-deref panic（进程静默死亡
+	// 路径），先显式返回 not_connected（transfer.go 同款守卫）。
 	nc := s.mgr.Conn()
+	if nc == nil {
+		return fail(CodeNotConnected, "not connected")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dropped := make(chan struct{})
@@ -188,7 +202,14 @@ func (s *JetAdminService) RestoreBackup(dir string, overwrite bool) CallResult {
 			return ClassifyError(err)
 		}
 	}
+	// 此刻距 handles() 已隔多次网络往返（IsKnownStream/DeleteStream ≤timeout
+	// 各一次）——期间断连则 Manager.Conn() 返回 nil，递给 watchdog 会在其
+	// goroutine 里 nil-deref panic（进程静默死亡路径），先显式返回
+	// not_connected（transfer.go 同款守卫）。
 	nc := s.mgr.Conn()
+	if nc == nil {
+		return fail(CodeNotConnected, "not connected")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dropped := make(chan struct{})
