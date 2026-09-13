@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/WenElevating/nats-desktop/desktop/internal/jsctx"
 	"github.com/WenElevating/nats-desktop/desktop/internal/testutil"
 )
@@ -307,5 +309,48 @@ func TestObjBucketAndObjectLifecycleLocalServer(t *testing.T) {
 	}
 	if _, err := osb.PutBytes(context.Background(), "x", []byte("y")); err == nil {
 		t.Fatal("write to sealed bucket must fail")
+	}
+}
+
+// TestRenameObjectPreservesMetadata（Task 5 审查裁定 carry-in）：nats.go 的
+// UpdateMeta 以传入 meta **整体覆盖** Description/Headers/Metadata（零值即清空）
+// ——改名必须先 GetInfo 回填旧值，否则外部创建的带描述/元数据对象改名即静默
+// 丢元数据。直连 UpdateMeta 设置 Description+Metadata 后经服务层改名，断言
+// 全部存活。
+func TestRenameObjectPreservesMetadata(t *testing.T) {
+	url := testutil.StartJSServer(t)
+	svc := newSvc(t, url)
+	if res := svc.CreateObjBucket(ObjBucketForm{Name: "RM", Replicas: 1}); !res.Ok() {
+		t.Fatalf("create: %+v", res)
+	}
+	inj := mustConn(t, url)
+	defer inj.Close()
+	js, err := jsctx.New(inj, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	osb, err := js.ObjectStore(context.Background(), "RM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := osb.PutBytes(context.Background(), "ext.txt", []byte("meta")); err != nil {
+		t.Fatal(err)
+	}
+	if err := osb.UpdateMeta(context.Background(), "ext.txt", jetstream.ObjectMeta{
+		Name:        "ext.txt",
+		Description: "外部创建",
+		Metadata:    map[string]string{"k": "v"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if res := svc.RenameObject("RM", "ext.txt", "renamed.txt"); !res.Ok() {
+		t.Fatalf("rename: %+v", res)
+	}
+	info, err := osb.GetInfo(context.Background(), "renamed.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Description != "外部创建" || info.Metadata["k"] != "v" {
+		t.Fatalf("metadata lost on rename: %+v", info.ObjectMeta)
 	}
 }

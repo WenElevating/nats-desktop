@@ -207,9 +207,11 @@ func (s *BucketService) DeleteObject(bucket, name string) CallResult {
 	return CallResult{}
 }
 
-// RenameObject 改名（os.UpdateMeta 仅换 Name，其余元数据由 nats.go 内部保留）：
-// 源对象不存在/已删除 → not_found（nats.go 把 GetInfo 的 ErrObjectNotFound 归一
-// 为 ErrUpdateMetaDeleted，服务层还原 not_found）；新名已被占用 → conflict。
+// RenameObject 改名。注意 nats.go 的 UpdateMeta 以传入 meta **整体覆盖**元数据
+// （Description/Headers/Metadata 直接取传入值，零值即清空）——先 GetInfo 回填
+// 旧值再改名，避免外部创建的带描述/元数据对象在改名时被静默清空（Task 5 审查
+// 裁定）。源对象不存在/已删除 → not_found（nats.go 把不存在的 GetInfo 归一为
+// ErrUpdateMetaDeleted，服务层还原 not_found）；新名已被占用 → conflict。
 func (s *BucketService) RenameObject(bucket, name, newName string) CallResult {
 	js, res := s.js()
 	if !res.Ok() {
@@ -221,7 +223,17 @@ func (s *BucketService) RenameObject(bucket, name, newName string) CallResult {
 	if err != nil {
 		return ClassifyKvError(err) // ErrBucketNotFound → not_found
 	}
-	if err := osb.UpdateMeta(ctx, name, jetstream.ObjectMeta{Name: newName}); err != nil {
+	info, err := osb.GetInfo(ctx, name)
+	if err != nil {
+		return classifyObjError(err)
+	}
+	meta := jetstream.ObjectMeta{
+		Name:        newName,
+		Description: info.Description,
+		Headers:     info.Headers,
+		Metadata:    info.Metadata,
+	}
+	if err := osb.UpdateMeta(ctx, name, meta); err != nil {
 		return classifyObjError(err)
 	}
 	s.log.Info("object renamed", "bucket", bucket, "from", name, "to", newName)

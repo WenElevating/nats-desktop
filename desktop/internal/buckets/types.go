@@ -29,11 +29,13 @@ func (r CallResult) Ok() bool { return r.ErrorCode == CodeOK }
 func fail(code, msg string) CallResult { return CallResult{ErrorCode: code, Error: msg} }
 
 // Package-level sentinels for conditions the service layer must detect via
-// errors.Is (revert without history, full disk on download, oversized value).
+// errors.Is (revert without history, full disk on download, oversized value,
+// concurrent transfer rejected).
 var (
 	ErrNoHistory       = errors.New("key has no previous revision to revert to")
 	ErrDiskSpace       = errors.New("insufficient disk space at download target")
 	ErrPayloadTooLarge = errors.New("value exceeds 8MB limit")
+	ErrTransferBusy    = errors.New("another object transfer is already running")
 )
 
 // Event names (spec §8.5 additive extensions).

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -34,6 +35,8 @@ type BucketService struct {
 	emit         func(name string, data any)
 	settingsPath string
 	watches      *watchRegistry // KV/对象 watch 注册表（watch.go，Task 4）
+	transferMu   atomic.Uint64  // 上传/下载互斥（同一时刻只允许一个传输，Task 6；同 jsadmin backupMu CAS 模式）
+	transferSeq  atomic.Uint64  // transfer_id 递增源（watch_id 同款数字串）
 }
 
 // NewBucketService wires the facade onto the active connection. mgr is taken
