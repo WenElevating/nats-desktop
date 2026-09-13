@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/WenElevating/nats-desktop/desktop/internal/appdir"
+	"github.com/WenElevating/nats-desktop/desktop/internal/buckets"
 	"github.com/WenElevating/nats-desktop/desktop/internal/connections"
 	"github.com/WenElevating/nats-desktop/desktop/internal/jsadmin"
 	"github.com/WenElevating/nats-desktop/desktop/internal/logging"
@@ -95,6 +96,12 @@ func main() {
 	// active connection's domain/API prefix.
 	jsAdminSvc := jsadmin.NewJetAdminService(manager, logger, emit, settingsPath)
 
+	// Bucket management facade (KeyValue/Object Store, spec §6.8/§6.9):
+	// CallResult-embedding results over jetstream KV/OS handles keyed off the
+	// active connection's domain/API prefix. Task 4 side-bands conn:state
+	// into bucketSvc.NotifyConnState here (watch 断连全停).
+	bucketSvc := buckets.NewBucketService(manager, logger, emit, settingsPath)
+
 	// settings.LastActiveContext persistence: load-modify-save on every
 	// successful Connect (spec §6.1). Routed through settings.Update so it
 	// shares the same serializer as SaveSettings — a settings save landing
@@ -127,6 +134,7 @@ func main() {
 			application.NewService(connSvc),
 			application.NewService(msgSvc),
 			application.NewService(jsAdminSvc),
+			application.NewService(bucketSvc),
 			application.NewService(version.NewService()),
 		},
 		Assets: application.AssetOptions{
