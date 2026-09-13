@@ -66,6 +66,15 @@ vi.mock("../src/lib/bindings", () => ({
   ConnSnapshot: vi.fn(),
   EnvWarnings: vi.fn(),
   GetContextForm: vi.fn(),
+  // Monitor surface (Task 13): the App's dashboard branch mounts the lazy
+  // DashboardPage (useMonitor + advisory watch) once connected, so its
+  // bindings must exist here as promise-returning no-ops (useMonitor's
+  // unmount cleanup awaits StopMonitoring).
+  StartMonitoring: vi.fn(async () => ({})),
+  StopMonitoring: vi.fn(async () => ({})),
+  GetMonitoringSnapshot: vi.fn(async () => null),
+  CreateSysWatch: vi.fn(async () => ({ watch_id: "" })),
+  StopSysWatch: vi.fn(async () => ({})),
 }));
 
 beforeEach(() => {

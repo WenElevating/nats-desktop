@@ -54,23 +54,7 @@ const ConsumersPage = lazy(() => import("./features/consumers/ConsumersPage"));
 const KeyValuePage = lazy(() => import("./features/kv/KeyValuePage"));
 const ObjectsPage = lazy(() => import("./features/objects/ObjectsPage"));
 const MonitoringPage = lazy(() => import("./features/monitoring/MonitoringPage"));
-
-/**
- * Placeholder for the pages landing later in M5 (Dashboard). Only rendered
- * while connected; the Shell swaps in its own guidance state otherwise.
- */
-function PagePlaceholder({ page }: { page: PageId }) {
-  const { t } = useTranslation();
-  return (
-    <div
-      data-testid={`page-${page}`}
-      className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center"
-    >
-      <h2 className="text-lg font-medium">{t(`nav.${page}`)}</h2>
-      <p className="text-sm text-[var(--fg-muted)]">{t("common.comingSoon")}</p>
-    </div>
-  );
-}
+const DashboardPage = lazy(() => import("./features/dashboard/DashboardPage"));
 
 /** Suspense fallback while a lazy page chunk is loading: a quiet skeleton. */
 function PageSkeleton() {
@@ -293,7 +277,12 @@ function AppBody() {
             <MonitoringPage />
           </Suspense>
         ) : (
-          <PagePlaceholder page={page} />
+          // Dashboard (default landing page): overview cards + recent
+          // advisories; onNavigate lets the cards deep-link into the pages
+          // that manage what they summarize.
+          <Suspense fallback={<PageSkeleton />}>
+            <DashboardPage onNavigate={setPage} />
+          </Suspense>
         )}
       </Shell>
       <CommandPalette
