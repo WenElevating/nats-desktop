@@ -12,6 +12,7 @@ import (
 	"github.com/WenElevating/nats-desktop/desktop/internal/jsadmin"
 	"github.com/WenElevating/nats-desktop/desktop/internal/logging"
 	"github.com/WenElevating/nats-desktop/desktop/internal/messaging"
+	"github.com/WenElevating/nats-desktop/desktop/internal/monitor"
 	"github.com/WenElevating/nats-desktop/desktop/internal/settings"
 	"github.com/WenElevating/nats-desktop/desktop/internal/version"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -79,6 +80,7 @@ func main() {
 	reg, backend := connections.NewRegistryAndBackend()
 	var msgSvc *messaging.MessagingService
 	var bktSvc *buckets.BucketService
+	var monSvc *monitor.MonitorService
 	emit := func(name string, data any) {
 		if app := application.Get(); app != nil {
 			app.Event.Emit(name, data)
@@ -92,6 +94,12 @@ func main() {
 				// watcher 并清空注册表；通知路径非阻塞，Manager emit 路径安全。
 				if bktSvc != nil {
 					bktSvc.NotifyConnState(ev)
+				}
+				// Server monitoring + cluster ops (Task 9): 非 connected 状态
+				// 停快照轮询与全部 $SYS watch，与 bucket watcher 同一断连全停
+				// 语义；monSvc 构造后即赋值，nil 守卫覆盖构造前窗口。
+				if monSvc != nil {
+					monSvc.NotifyConnState(ev)
 				}
 			}
 		}
@@ -111,6 +119,11 @@ func main() {
 	// NotifyConnState — watchers stop-all on disconnect/failure.
 	bucketSvc := buckets.NewBucketService(manager, logger, emit, settingsPath)
 	bktSvc = bucketSvc
+
+	// Server monitoring + cluster ops facade (spec §6.10/§6.11): snapshot
+	// ticker and $SYS event watches stop-all on disconnect via the same
+	// conn:state side-band as the bucket watchers.
+	monSvc = monitor.NewMonitorService(manager, logger, emit, settingsPath)
 
 	// settings.LastActiveContext persistence: load-modify-save on every
 	// successful Connect (spec §6.1). Routed through settings.Update so it
@@ -145,6 +158,7 @@ func main() {
 			application.NewService(msgSvc),
 			application.NewService(jsAdminSvc),
 			application.NewService(bucketSvc),
+			application.NewService(monSvc),
 			application.NewService(version.NewService()),
 		},
 		Assets: application.AssetOptions{
