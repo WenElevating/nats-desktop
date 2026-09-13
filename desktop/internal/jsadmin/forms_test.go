@@ -509,3 +509,35 @@ func TestDecodeHeaders(t *testing.T) {
 		t.Fatal("empty block must error")
 	}
 }
+
+// TestStreamConfigToFormEchoesWorkqueueAndSources covers the config→form
+// direction (the edit/copy form echo): non-limits retention policies must
+// round-trip (a workqueue stream's edit form must not silently become
+// "limits"), and mirror/sources must echo back with nil entries skipped.
+func TestStreamConfigToFormEchoesWorkqueueAndSources(t *testing.T) {
+	cfg := api.StreamConfig{
+		Name:      "WQ",
+		Storage:   api.MemoryStorage,
+		Retention: api.WorkQueuePolicy,
+		Mirror:    &api.StreamSource{Name: "up", FilterSubject: "up.>", OptStartSeq: 7},
+		Sources:   []*api.StreamSource{{Name: "s1", FilterSubject: "s1.>", OptStartSeq: 3}, nil},
+	}
+	f := configToForm(cfg)
+	if f.Retention != "workqueue" || f.Storage != "memory" {
+		t.Fatalf("retention/storage echo wrong: %+v", f)
+	}
+	if f.Mirror == nil || f.Mirror.Name != "up" || f.Mirror.FilterSubject != "up.>" || f.Mirror.OptStartSeq != 7 {
+		t.Fatalf("mirror echo wrong: %+v", f.Mirror)
+	}
+	if len(f.Sources) != 1 || f.Sources[0].Name != "s1" { // nil source skipped
+		t.Fatalf("sources echo wrong: %+v", f.Sources)
+	}
+	if got := retentionFromAPI(api.InterestPolicy); got != "interest" {
+		t.Fatalf("interest echo wrong: %q", got)
+	}
+	// form → config keeps the echoed mirror/sources (copy-stream fidelity).
+	out := StreamFormToConfig(&f)
+	if out.Mirror == nil || out.Mirror.Name != "up" || len(out.Sources) != 1 || out.Sources[0].Name != "s1" {
+		t.Fatalf("mirror/sources round trip wrong: %+v", out)
+	}
+}

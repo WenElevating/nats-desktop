@@ -24,6 +24,20 @@ const HEX_PREVIEW_BYTES = 4096;
 export interface StreamMsgsSummary {
   firstSeq: number;
   lastSeq: number;
+  /**
+   * Host stream retention ("limits" | "interest" | "workqueue"). Older
+   * callers may omit it — only used for the workqueue browse hint.
+   */
+  retention?: string;
+}
+
+/**
+ * Browse-failure toast text: workqueue streams get an extra allow_direct
+ * hint appended (natscli parity — the server rejects browsing unless
+ * allow_direct is enabled; pure, exported for tests).
+ */
+export function withWorkqueueHint(base: string, retention: string | undefined, hint: string): string {
+  return retention === "workqueue" ? `${base} ${hint}` : base;
 }
 
 export interface StreamMsgsProps {
@@ -110,19 +124,31 @@ export function StreamMsgs({ stream, summary, onClose }: StreamMsgsProps) {
       try {
         const res = await BrowseStream({ stream, start_seq: start, count, subject_filter: subject });
         if (res?.error_code) {
-          toast.error(t("streams.msgs.loadFailed", { error: res.error || res.error_code }));
+          toast.error(
+            withWorkqueueHint(
+              t("streams.msgs.loadFailed", { error: res.error || res.error_code }),
+              summary?.retention,
+              t("streams.msgs.workqueueHint"),
+            ),
+          );
           return;
         }
         setMsgs(res?.messages ?? []);
         setHasMore(res?.has_more ?? false);
         setNextStart(res?.next_start_seq ?? start);
       } catch (err) {
-        toast.error(t("streams.msgs.loadFailed", { error: errText(err) }));
+        toast.error(
+          withWorkqueueHint(
+            t("streams.msgs.loadFailed", { error: errText(err) }),
+            summary?.retention,
+            t("streams.msgs.workqueueHint"),
+          ),
+        );
       } finally {
         setLoading(false);
       }
     },
-    [stream, t],
+    [stream, t, summary?.retention],
   );
 
   // The paging state IS the request: any control change re-issues BrowseStream
@@ -233,6 +259,15 @@ export function StreamMsgs({ stream, summary, onClose }: StreamMsgsProps) {
           {stream}
         </h2>
         <span className="text-xs text-[var(--fg-muted)]">{t("streams.msgs.title")}</span>
+        {summary?.retention === "workqueue" && (
+          <span
+            data-testid="msgs-workqueue-hint"
+            className="max-w-[420px] truncate text-xs text-[var(--warn)]"
+            title={t("streams.msgs.workqueueHint")}
+          >
+            {t("streams.msgs.workqueueHint")}
+          </span>
+        )}
 
         <div className="ml-auto flex flex-wrap items-center gap-1">
           <Button

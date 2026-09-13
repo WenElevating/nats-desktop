@@ -391,3 +391,25 @@ func TestRestoreMalformedBackupJSON(t *testing.T) {
 		t.Fatalf("malformed restore must not create streams, got ok=%v n=%d err=%s", ls.Ok(), len(ls.Streams), ls.Error)
 	}
 }
+
+// TestPickBackupDirectoryHeadless covers the headless branch (M3 §6-9): with
+// no Wails application running (unit tests), the native chooser is
+// unavailable and the picker returns "" — cancelled semantics, no panic.
+func TestPickBackupDirectoryHeadless(t *testing.T) {
+	svc := NewJetAdminService(nil, nil, nil, "")
+	if got := svc.PickBackupDirectory(); got != "" {
+		t.Fatalf("expected \"\" (cancelled) in headless mode, got %q", got)
+	}
+}
+
+// TestLogIncompleteMsgRestoreBranch pins the restore wording of the
+// connection-dropped finisher: the incomplete log line must name restore,
+// not fall through to the backup message.
+func TestLogIncompleteMsgRestoreBranch(t *testing.T) {
+	if got := logIncompleteMsg("restore"); got != "restore incomplete: connection closed" {
+		t.Fatalf("restore wording wrong: %q", got)
+	}
+	if got := logIncompleteMsg("backup"); got != "backup incomplete: connection closed" {
+		t.Fatalf("backup wording wrong: %q", got)
+	}
+}

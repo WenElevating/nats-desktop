@@ -42,6 +42,7 @@ _testmain.go
 
 # coverage
 coverage.out
+desktop/frontend/coverage/
 
 # Cross compiled binaries
 pkg

@@ -216,6 +216,7 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
               summary={{
                 firstSeq: api.detail.summary.first_seq,
                 lastSeq: api.detail.summary.last_seq,
+                retention: api.detail.summary.retention,
               }}
               onClose={() => setMsgsOpen(false)}
             />

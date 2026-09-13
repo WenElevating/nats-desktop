@@ -2,9 +2,12 @@ package jsadmin
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/nats.go"
 
 	"github.com/WenElevating/nats-desktop/desktop/internal/testutil"
@@ -287,6 +290,120 @@ func TestStreamLifecycleLocalServer(t *testing.T) {
 	list = svc.ListStreams()
 	if !list.Ok() || findStream(list.Streams, name) == nil || findStream(list.Streams, copyName) != nil {
 		t.Fatalf("expected %s to remain and %s gone: %+v", name, copyName, list)
+	}
+}
+
+// TestListStreamsUnavailableErrorCode pins the error_code half of the
+// unavailable result (M3 §6-9): the guidance panel keys off
+// error_code=js_unavailable, so the reason string alone must never be the
+// only signal (spec §8.5.2 closed set).
+func TestListStreamsUnavailableErrorCode(t *testing.T) {
+	svc := newAdminWithPrefix(t, testutil.StartJSServer(t), "$WRONG.API") // JSParams 替身返回错误前缀
+	list := svc.ListStreams()
+	if list.Ok() {
+		t.Fatalf("expected unavailable result, got %+v", list)
+	}
+	if list.ErrorCode != CodeJSUnavailable {
+		t.Fatalf("expected error_code %q, got %+v", CodeJSUnavailable, list.CallResult)
+	}
+	if list.UnavailableReason != ReasonNoResponders || len(list.Streams) != 0 {
+		t.Fatalf("expected no_responders with empty list, got %+v", list)
+	}
+}
+
+// TestListStreamsTimeoutReason covers the isTimeout classification: a silent
+// subscriber on the wrong-prefix API subject receives requests but never
+// answers, so jsm's request dies with context.DeadlineExceeded (not
+// no_responders) and the guidance must say "timeout". The service reads the
+// 1s request timeout from a settings file, which also covers timeout()'s
+// settings-backed branch.
+func TestListStreamsTimeoutReason(t *testing.T) {
+	nc, err := nats.Connect(testutil.StartJSServer(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { nc.Close() })
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"behavior":{"request_timeout_seconds":1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewJetAdminService(&connStub{nc: nc, prefix: "$TOUT.API"}, nil, nil, settingsPath)
+	// jsm 的 WithAPIPrefix 整体替换 $JS.API（不拼接），订阅前缀下的所有主题
+	// 即可覆盖两种形态；订阅者收下请求却不应答 → 超时而非 no_responders。
+	sub, err := nc.Subscribe("$TOUT.API.>", func(*nats.Msg) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	list := svc.ListStreams()
+	if list.Ok() || list.UnavailableReason != ReasonTimeout {
+		t.Fatalf("expected timeout guidance, got %+v", list)
+	}
+	if list.ErrorCode != CodeServer {
+		t.Fatalf("expected error_code %q for a timed-out request, got %+v", CodeServer, list.CallResult)
+	}
+}
+
+// TestCopyStreamMirrorSource covers the mirror/source copy branch: a source
+// stream that declares no subjects (mirror- or sources-fed) must be copied
+// with its ORIGINAL config — the mirror/sources still point at the upstream
+// stream, never at the copy's source (streams.go only rewrites subjects-fed
+// sources into mirrors).
+func TestCopyStreamMirrorSource(t *testing.T) {
+	svc := newAdmin(t, testutil.StartJSServer(t))
+	base := StreamForm{Name: "SRC", Subjects: []string{"src.>"}, Storage: "file", Retention: "limits", Replicas: 1}
+	if res := svc.CreateStream(base); !res.Ok() {
+		t.Fatalf("create base: %+v", res)
+	}
+	publishN(t, svc, "src.a", 2)
+
+	// Mirror-fed source stream (no subjects) → direct config copy.
+	mirrorForm := StreamForm{Name: "MSRC", Storage: "file", Retention: "limits", Replicas: 1, Mirror: &StreamSourceForm{Name: "SRC"}}
+	if res := svc.CreateStream(mirrorForm); !res.Ok() {
+		t.Fatalf("create mirror stream: %+v", res)
+	}
+	if res := svc.CopyStream("MSRC", "MSRC_COPY"); !res.Ok() {
+		t.Fatalf("copy mirror stream: %+v", res)
+	}
+	// The copy mirrors SRC (not MSRC) and catches up to SRC's 2 messages
+	// (mirror replication is async — poll like the lifecycle tests).
+	copyDetail := waitDetailMessages(t, svc, "MSRC_COPY", 2)
+	if !copyDetail.Summary.IsMirror || copyDetail.Mirror == nil || copyDetail.Mirror.Name != "SRC" {
+		t.Fatalf("copied mirror must keep the original upstream: %+v", copyDetail)
+	}
+
+	// Sources-fed source stream (no subjects) → same direct-copy semantics.
+	// The form validator requires subjects unless mirroring (UI-layer gate),
+	// so build this one through the jsm handle like the server does.
+	mgr, _, res := svc.handles()
+	if !res.Ok() {
+		t.Fatalf("handles: %+v", res)
+	}
+	if _, err := mgr.NewStreamFromDefault("QSRC", api.StreamConfig{
+		Name:      "QSRC",
+		Storage:   api.FileStorage,
+		Retention: api.LimitsPolicy,
+		Replicas:  1,
+		Sources:   []*api.StreamSource{{Name: "SRC"}},
+	}); err != nil {
+		t.Fatalf("create sources stream: %v", err)
+	}
+	if res := svc.CopyStream("QSRC", "QSRC_COPY"); !res.Ok() {
+		t.Fatalf("copy sources stream: %+v", res)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		d := svc.GetStreamDetail("QSRC_COPY")
+		if d.Ok() && len(d.Sources) == 1 && d.Sources[0].Name == "SRC" && d.Summary.IsSource {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("copied sources must keep the original upstream: %+v", d)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

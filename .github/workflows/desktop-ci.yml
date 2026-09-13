@@ -43,7 +43,7 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx eslint src --max-warnings 0
-      - run: npx vitest run # includes the i18n completeness gate (spec AC-021, automated half)
+      - run: npx vitest run --coverage # includes the i18n completeness gate (spec AC-021, automated half); --coverage prints the components baseline (M4 Task 9)
 
   build:
     needs: [go, frontend]

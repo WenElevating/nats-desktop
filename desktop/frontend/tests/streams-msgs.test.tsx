@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { it, expect, vi, beforeEach } from "vitest";
-import { computePrevStart, detectHoles, StreamMsgs } from "../src/features/streams/StreamMsgs";
+import { toast } from "sonner";
+import { computePrevStart, detectHoles, withWorkqueueHint, StreamMsgs } from "../src/features/streams/StreamMsgs";
 import { StreamsPage } from "../src/features/streams/StreamsPage";
 import {
   BrowseStream,
@@ -172,11 +173,15 @@ const flush = async (ms = 10) => {
 let onClose: ReturnType<typeof vi.fn>;
 
 /** Mounts the browser panel inside the app-wide ConfirmProvider. */
-const setup = async () => {
+const setup = async (retention?: string) => {
   onClose = vi.fn();
   render(
     <ConfirmProvider>
-      <StreamMsgs stream="ORDERS" summary={{ firstSeq: 1, lastSeq: 100 }} onClose={onClose} />
+      <StreamMsgs
+        stream="ORDERS"
+        summary={{ firstSeq: 1, lastSeq: 100, retention }}
+        onClose={onClose}
+      />
     </ConfirmProvider>,
   );
   await flush();
@@ -447,6 +452,45 @@ it("empty pages show the empty state and pending loads show skeleton rows", asyn
     </ConfirmProvider>,
   );
   expect(screen.getByTestId("msgs-loading")).toBeTruthy();
+});
+
+// ---- workqueue browse hint (M3 remediation, natscli parity note) ----
+
+it("withWorkqueueHint appends the allow_direct guidance only for workqueue retention", () => {
+  expect(withWorkqueueHint("load failed: x", "workqueue", "HINT")).toBe("load failed: x HINT");
+  expect(withWorkqueueHint("load failed: x", "limits", "HINT")).toBe("load failed: x");
+  expect(withWorkqueueHint("load failed: x", "interest", "HINT")).toBe("load failed: x");
+  expect(withWorkqueueHint("load failed: x", undefined, "HINT")).toBe("load failed: x");
+});
+
+it("workqueue streams show a persistent allow_direct hint and append it to load-failure toasts", async () => {
+  vi.mocked(BrowseStream).mockResolvedValue({
+    error_code: "js_unavailable",
+    error: "direct get not allowed",
+    messages: [],
+    next_start_seq: 1,
+    has_more: false,
+  } as never);
+  await setup("workqueue");
+
+  // Persistent header hint: users know before erroring.
+  expect(screen.getByTestId("msgs-workqueue-hint").textContent).toContain("allow_direct");
+  // The browse-failure toast carries the same guidance.
+  expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("allow_direct"));
+});
+
+it("non-workqueue streams render no hint and plain failure toasts", async () => {
+  vi.mocked(BrowseStream).mockResolvedValue({
+    error_code: "server",
+    error: "boom",
+    messages: [],
+    next_start_seq: 1,
+    has_more: false,
+  } as never);
+  await setup("limits");
+
+  expect(screen.queryByTestId("msgs-workqueue-hint")).toBeNull();
+  expect(toast.error).toHaveBeenCalledWith(expect.not.stringContaining("allow_direct"));
 });
 
 // ---- wiring: StreamDetail's Messages op opens the browser panel (Task 10 slot) ----

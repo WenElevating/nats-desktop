@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -148,5 +149,55 @@ func TestRedactContextHidesTokenAndSeed(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("non-secret %q missing in %q", want, out)
 		}
+	}
+}
+
+// TestRotationFailureKeepsWriting covers the rotation failure branch (M3
+// §6-9): both backup slots are occupied by non-empty directories, so every
+// Remove/Rename inside rotate fails and the reopen lands on the original
+// file. rotate must surface a wrapped error (not panic), and the writer must
+// keep accepting writes afterwards — rotation failure never takes the
+// process down (spec §13.3 best-effort handling).
+func TestRotationFailureKeepsWriting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, logFileName)
+	w, err := newRotatingWriter(path, 64, keepFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("seed")); err != nil {
+		t.Fatal(err)
+	}
+	// 占位：.1/.2 备份位放非空目录——rotate 的 Remove/Rename 全部失败，
+	// 且 .1 无法被「文件换入」，reopen 只能落在原文件上。
+	for _, i := range []int{1, 2} {
+		d := filepath.Join(dir, fmt.Sprintf("%s.%d", logFileName, i))
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "occupied"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 直接调用 rotate（Write 端对轮转错误为 best-effort 丢弃）：断言错误被
+	// 返回且不含 panic。
+	if err := w.rotate(); err == nil {
+		t.Fatal("expected rotate to report the rename failure, got nil")
+	} else if !strings.Contains(err.Error(), logFileName) {
+		t.Fatalf("rotate error should reference the log path: %v", err)
+	}
+	// 失败后 writer 仍可用：后续写入照常落盘（不丢日志、进程不崩）。
+	if _, err := w.Write([]byte("after-rotate")); err != nil {
+		t.Fatalf("write after rotate failure: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "after-rotate") {
+		t.Fatalf("post-failure write lost: %q", b)
 	}
 }
