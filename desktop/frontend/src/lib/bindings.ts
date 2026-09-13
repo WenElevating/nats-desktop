@@ -164,6 +164,42 @@ export {
   UploadObject,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/bucketservice.js";
 
+// Server monitoring + cluster ops surface (spec §6.10/§6.11). The monitor
+// package re-declares CallResult with an identical shape — the jsadmin type
+// above stays the app's structural standard, so it is deliberately not
+// re-exported twice here. Emit-side event names (no binding registration,
+// payloads arrive as plain JSON via Events.On): "monitor:snapshot"
+// (EventMonitorSnapshot) and "sys:event" (EventSysWatch).
+export {
+  CreateSysWatch,
+  GetMonitoringSnapshot,
+  GetServerDetail,
+  KickConnection,
+  ListAccounts,
+  ListServerConnections,
+  MetaPeerRemove,
+  MetaStepDown,
+  StartMonitoring,
+  StopMonitoring,
+  StopSysWatch,
+  StreamBalance,
+  StreamPeerRemove,
+  StreamStepDown,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/monitor/monitorservice.js";
+export type {
+  AccountListResult,
+  AccountRow,
+  ClusterOpResult,
+  ConnPageResult,
+  ConnRow,
+  CreateSysWatchResult,
+  MonitorServerRow,
+  MonitorSnapshot,
+  ServerDetail,
+  ServerDetailResult,
+  SysWatchSpec,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/monitor/models.js";
+
 // Default mirrors settings.Default() in internal/settings/settings.go.
 // Keep the field values in sync with the Go side.
 export function Default(): Settings {
