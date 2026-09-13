@@ -45,17 +45,19 @@ export function useThemeController(mode: ThemeMode): boolean {
   return dark;
 }
 
-// Messages, Streams, Consumers and KV are code-split: their chunks load on
-// first navigation, keeping the startup bundle small (M1 chunk-size note).
+// Messages, Streams, Consumers, KV and Objects are code-split: their chunks
+// load on first navigation, keeping the startup bundle small (M1 chunk-size
+// note).
 const MessagesPage = lazy(() => import("./features/messages/MessagesPage"));
 const StreamsPage = lazy(() => import("./features/streams/StreamsPage"));
 const ConsumersPage = lazy(() => import("./features/consumers/ConsumersPage"));
 const KeyValuePage = lazy(() => import("./features/kv/KeyValuePage"));
+const ObjectsPage = lazy(() => import("./features/objects/ObjectsPage"));
 
 /**
- * Placeholder for the pages landing in M4–M5 (Dashboard, KV, Objects,
- * Monitoring). Only rendered while connected; the Shell swaps in its own
- * guidance state otherwise.
+ * Placeholder for the pages landing in M5 (Dashboard, Monitoring). Only
+ * rendered while connected; the Shell swaps in its own guidance state
+ * otherwise.
  */
 function PagePlaceholder({ page }: { page: PageId }) {
   const { t } = useTranslation();
@@ -281,6 +283,10 @@ function AppBody() {
         ) : page === "kv" ? (
           <Suspense fallback={<PageSkeleton />}>
             <KeyValuePage />
+          </Suspense>
+        ) : page === "objects" ? (
+          <Suspense fallback={<PageSkeleton />}>
+            <ObjectsPage />
           </Suspense>
         ) : (
           <PagePlaceholder page={page} />

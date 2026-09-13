@@ -135,8 +135,34 @@ export type {
   KvBucketSummary,
   ListBucketsResult,
   ListKeysResult,
+  ListObjectsResult,
+  ObjBucketDetailResult,
+  ObjBucketForm,
+  ObjBucketSummary,
+  ObjectOut,
   PutKeyResult,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/models.js";
+// Object-store half of the buckets surface (spec §6.9): bucket crud/seal,
+// object list/delete/rename, the blocking transfer pair with its native
+// pickers, and the file-manager reveal. StopWatch / CreateWatchResult /
+// ListBucketsResult are shared with the KV exports above.
+export {
+  CreateObjBucket,
+  CreateObjWatch,
+  DeleteObjBucket,
+  DeleteObject,
+  DownloadObject,
+  GetObjBucketDetail,
+  ListObjBuckets,
+  ListObjects,
+  OpenInFileManager,
+  PickDownloadDirectory,
+  PickUploadFiles,
+  RenameObject,
+  SealObjBucket,
+  UpdateObjBucket,
+  UploadObject,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/bucketservice.js";
 
 // Default mirrors settings.Default() in internal/settings/settings.go.
 // Keep the field values in sync with the Go side.
