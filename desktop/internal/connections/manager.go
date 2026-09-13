@@ -198,6 +198,23 @@ func (m *Manager) JSParams() (domain, apiPrefix string, ok bool) {
 	return c.JSDomain(), c.JSAPIPrefix(), true
 }
 
+// JSEventPrefix returns the active context's jetstream_event_prefix
+// (spec §8.3 JS 事件主题；空 = 默认 $JS.EVENT)。
+func (m *Manager) JSEventPrefix() string {
+	m.mu.Lock()
+	name := m.active
+	connected := m.state == StateConnected
+	m.mu.Unlock()
+	if !connected || name == "" {
+		return ""
+	}
+	c, err := m.reg.Load(context.Background(), name)
+	if err != nil {
+		return ""
+	}
+	return c.JSEventPrefix()
+}
+
 // Snapshot returns the current state as a StateEvent.
 func (m *Manager) Snapshot() StateEvent {
 	m.mu.Lock()
