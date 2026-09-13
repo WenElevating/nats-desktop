@@ -24,8 +24,10 @@ jobs:
           go-version: "1.26"
       - run: go vet ./...
       # -race needs cgo (preinstalled MinGW on windows runners); kept in CI
-      # because the local toolchain cannot run it.
-      - run: go test ./... -race -count=1
+      # because the local toolchain cannot run it. -cover prints per-package
+      # coverage; the buckets ≥80% judgment (§20.1) is recorded in the test
+      # report — CI only surfaces the numbers, the gate is enforced there.
+      - run: go test ./... -race -count=1 -cover
 
   frontend:
     runs-on: ubuntu-latest

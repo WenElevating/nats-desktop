@@ -1,12 +1,15 @@
 package buckets
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -32,6 +35,94 @@ func TestValidateKvBucketForm(t *testing.T) {
 		if err := ValidateKvBucketForm(&bad[i]); err == nil {
 			t.Fatalf("case %d accepted: %+v", i, bad[i])
 		}
+	}
+}
+
+func TestValidateObjBucketForm(t *testing.T) {
+	ok := ObjBucketForm{Name: "FILES", Replicas: 0, MaxBytes: -1} // Replicas 0 → 默认 1；-1 = 无限制
+	if err := ValidateObjBucketForm(&ok); err != nil {
+		t.Fatalf("%+v: %v", ok, err)
+	}
+	if ok.Replicas != 1 {
+		t.Fatalf("replicas default not applied: %+v", ok)
+	}
+	bad := []ObjBucketForm{
+		{Name: "", Replicas: 1},          // 空名
+		{Name: "my.bucket", Replicas: 1}, // 桶名字符集 ^[a-zA-Z0-9_-]+$
+		{Name: "S", MaxBytes: -2},        // ≥-1
+		{Name: "S", Replicas: 9},         // 副本 1–5
+	}
+	for i := range bad {
+		if err := ValidateObjBucketForm(&bad[i]); err == nil {
+			t.Fatalf("case %d accepted: %+v", i, bad[i])
+		}
+	}
+}
+
+func TestValidateWatchFilter(t *testing.T) {
+	// 规则 = nats.go searchKeyValid：键字符集 + 任意位置 `*` + 可选尾部 `>`
+	for _, ok := range []string{"a.*", "a.>", "a*b", "k-1_x=2", "path/*"} {
+		if err := ValidateWatchFilter(ok); err != nil {
+			t.Fatalf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", ".a", "a.", "a..b", "a b", "a>b"} { // "a>b"：`>` 仅可居尾
+		if err := ValidateWatchFilter(bad); err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+}
+
+func TestValidatePayloadSize(t *testing.T) {
+	if err := ValidatePayloadSize(MaxValueBytes); err != nil {
+		t.Fatalf("at cap: %v", err)
+	}
+	err := ValidatePayloadSize(MaxValueBytes + 1)
+	if err == nil || !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("over cap: %+v", err)
+	}
+}
+
+func TestKvOpToWire(t *testing.T) {
+	cases := map[jetstream.KeyValueOp]string{
+		jetstream.KeyValuePut:    "put",
+		jetstream.KeyValueDelete: "delete",
+		jetstream.KeyValuePurge:  "purge",
+	}
+	for op, want := range cases {
+		if got := kvOpToWire(op); got != want {
+			t.Fatalf("%v: got %s want %s", op, got, want)
+		}
+	}
+}
+
+func TestClassifyObjError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{jetstream.ErrObjectNotFound, CodeNotFound},
+		{jetstream.ErrUpdateMetaDeleted, CodeNotFound},
+		{jetstream.ErrObjectAlreadyExists, CodeConflict},
+		{jetstream.ErrNameRequired, CodeValidation},
+		{jetstream.ErrBadObjectMeta, CodeValidation},
+		{jetstream.ErrJetStreamNotEnabled, CodeJSUnavailable}, // 非对象专属 sentinel → 泛化 KV 分类
+	}
+	for _, c := range cases {
+		if got := classifyObjError(c.err).ErrorCode; got != c.want {
+			t.Fatalf("%v: got %s want %s", c.err, got, c.want)
+		}
+	}
+}
+
+// TestUnavailableReasonHelpers pins the JS-layer cause classification used by
+// the list guidance panel (errors.Is — never string matching).
+func TestUnavailableReasonHelpers(t *testing.T) {
+	if !isNoResponders(nats.ErrNoResponders) || isNoResponders(context.DeadlineExceeded) {
+		t.Fatal("isNoResponders misclassifies")
+	}
+	if !isTimeout(context.DeadlineExceeded) || isTimeout(nats.ErrNoResponders) {
+		t.Fatal("isTimeout misclassifies")
 	}
 }
 

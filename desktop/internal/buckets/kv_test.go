@@ -164,6 +164,18 @@ func TestKvBucketListUnavailableLocalServer(t *testing.T) {
 	}
 }
 
+// TestObjBucketListUnavailableLocalServer mirrors the KV wrong-API-prefix
+// case for the object half: the JS lister lands on unanswered subjects —
+// unavailable guidance (no_responders), not an empty-looking success.
+func TestObjBucketListUnavailableLocalServer(t *testing.T) {
+	nc := testutil.ConnectLocalServer(t)
+	svc := NewBucketService(&connStub{nc: nc, prefix: "$WRONG.API"}, nil, nil, "")
+	list := svc.ListObjBuckets()
+	if list.Ok() || list.UnavailableReason != ReasonNoResponders || len(list.ObjBuckets) != 0 {
+		t.Fatalf("expected unavailable guidance, got %+v", list)
+	}
+}
+
 // b64/mustB64 键值 wire 编码助手（payload_b64 = base64.StdEncoding）；findKey
 // 返回键在列表中的下标（未命中 -1）。
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }

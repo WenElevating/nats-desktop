@@ -64,6 +64,25 @@ func (s *BucketService) watchDropped() uint64 {
 	return total
 }
 
+// TestWatchEntryOfferDropOldest pins the bounded-queue backpressure semantics
+// (watch.go, Global 4): on a full queue offer drops the OLDEST entry and
+// counts the drop (no server needed — direct struct exercise).
+func TestWatchEntryOfferDropOldest(t *testing.T) {
+	e := &watchEntry{id: "t", ch: make(chan any, 2), done: make(chan struct{})}
+	for i := 0; i < 3; i++ {
+		e.offer(KvWatchEvent{WatchId: fmt.Sprintf("w%d", i)})
+	}
+	if got := e.drop.Load(); got != 1 {
+		t.Fatalf("drop count: %d != 1", got)
+	}
+	if len(e.ch) != 2 {
+		t.Fatalf("queue len: %d != 2", len(e.ch))
+	}
+	if first := (<-e.ch).(KvWatchEvent).WatchId; first != "w1" { // w0 被丢最旧
+		t.Fatalf("queue head: %s != w1", first)
+	}
+}
+
 func TestKvWatchLifecycle(t *testing.T) {
 	url := testutil.StartJSServer(t)
 	var mu sync.Mutex

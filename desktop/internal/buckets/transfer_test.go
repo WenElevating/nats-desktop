@@ -165,6 +165,19 @@ func TestDownloadDiskSpaceGate(t *testing.T) {
 	}
 }
 
+// TestPickersHeadless covers the native choosers' headless branches
+// (application.Get() nil in tests → empty results, no error surfaced;
+// jsadmin TestPickBackupDirectoryHeadless 同款).
+func TestPickersHeadless(t *testing.T) {
+	svc := NewBucketService(&connStub{}, nil, nil, "")
+	if got := svc.PickUploadFiles(); len(got) != 0 {
+		t.Fatalf("headless pick files: %v", got)
+	}
+	if got := svc.PickDownloadDirectory(); got != "" {
+		t.Fatalf("headless pick dir: %q", got)
+	}
+}
+
 // TestUploadIncompleteOnDisconnectLocalServer 自动化「上传中断」：LocalServer +
 // 20MB 随机文件，上传中途 close 底层连接 → 事件序列最后为 incomplete + 非 Ok
 // 返回；已完成分片保留在服务器（服务层不做任何删除，§6.9 上传中断行）。时序
