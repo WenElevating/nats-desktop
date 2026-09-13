@@ -1,7 +1,9 @@
 package buckets
 
 import (
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +161,188 @@ func TestKvBucketListUnavailableLocalServer(t *testing.T) {
 	list := svc.ListKvBuckets()
 	if list.Ok() || list.UnavailableReason != ReasonNoResponders || len(list.KvBuckets) != 0 {
 		t.Fatalf("expected unavailable guidance, got %+v", list)
+	}
+}
+
+// b64/mustB64 键值 wire 编码助手（payload_b64 = base64.StdEncoding）；findKey
+// 返回键在列表中的下标（未命中 -1）。
+func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+func mustB64(s string) []byte {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func findKey(keys []KeyMeta, k string) int {
+	for i := range keys {
+		if keys[i].Key == k {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestKvKeyLifecycle 走键操作全链路（§6.8）：put 三语义（含两种冲突路径）、
+// 历史、删除态感知 revert、del/purge 两模式。修订号 = 桶底层流序列，全局
+// 递增——本测试内只按预期顺序写入，故序号可精确断言（1..7）：键 a 依次
+// put1=1, put2=2, create 冲突（无写入）, update 冲突（无写入）, update3=3,
+// revert=4(v2), delete marker=5, revert-after-delete=6(v2)；键 b create=7。
+func TestKvKeyLifecycle(t *testing.T) {
+	svc := newSvc(t, testutil.StartJSServer(t))
+	svc.CreateKvBucket(KvBucketForm{Name: "OPS", History: 10, Replicas: 1})
+	// 键 a 系列（修订号 = 桶底层流序列，全局递增——本块内只写 a，序号可预测）
+	r1 := svc.PutKey("OPS", "a", b64("v1"), "put", 0)
+	if !r1.Ok() || r1.Revision != 1 {
+		t.Fatalf("put1: %+v", r1)
+	}
+	r2 := svc.PutKey("OPS", "a", b64("v2"), "put", 0)
+	if !r2.Ok() || r2.Revision != 2 {
+		t.Fatalf("put2: %+v", r2)
+	}
+	// create 冲突（§6.8 异常 1，无写入不占序列）
+	if res := svc.PutKey("OPS", "a", b64("x"), "create", 0); res.ErrorCode != CodeConflict {
+		t.Fatalf("create conflict: %+v", res)
+	}
+	// update 期望不符 → conflict + CurrentRevision（§6.8 异常 2，无写入）
+	if res := svc.PutKey("OPS", "a", b64("v3"), "update", 1); res.ErrorCode != CodeConflict || res.CurrentRevision != 2 {
+		t.Fatalf("update conflict: %+v", res)
+	}
+	if r3 := svc.PutKey("OPS", "a", b64("v3"), "update", 2); !r3.Ok() || r3.Revision != 3 {
+		t.Fatalf("update ok: %+v", r3)
+	}
+	// 历史（3 次修订含值，升序）
+	h := svc.GetKeyHistory("OPS", "a")
+	if !h.Ok() || len(h.Entries) != 3 || h.Entries[0].Revision != 1 {
+		t.Fatalf("history: %+v", h)
+	}
+	// revert → 回到 v2（put 产生 revision 4）
+	r4 := svc.RevertKey("OPS", "a")
+	if !r4.Ok() || r4.Revision != 4 {
+		t.Fatalf("revert: %+v", r4)
+	}
+	v := svc.GetKeyValues("OPS", []string{"a"})
+	if string(mustB64(v.Values[0].PayloadB64)) != "v2" {
+		t.Fatalf("revert value: %+v", v.Values[0])
+	}
+	// del（保留历史）→ 列表标记 delete；历史仍在（4 修订 + marker=5 条）
+	if res := svc.DeleteKey("OPS", "a", "delete"); !res.Ok() {
+		t.Fatalf("del: %+v", res)
+	}
+	kl := svc.ListKeys("OPS")
+	if kl.Keys[findKey(kl.Keys, "a")].Operation != "delete" {
+		t.Fatalf("after del: %+v", kl.Keys)
+	}
+	if h = svc.GetKeyHistory("OPS", "a"); !h.Ok() || len(h.Entries) != 5 {
+		t.Fatalf("history after del: %+v", h)
+	}
+	// 删除态 revert（F-09 语义）：最新为 delete marker → 恢复最后有效值 v2（put 产生 revision 6）
+	r6 := svc.RevertKey("OPS", "a")
+	if !r6.Ok() || r6.Revision != 6 {
+		t.Fatalf("revert after delete: %+v", r6)
+	}
+	v = svc.GetKeyValues("OPS", []string{"a"})
+	if string(mustB64(v.Values[0].PayloadB64)) != "v2" {
+		t.Fatalf("revert-after-delete value: %+v", v.Values[0])
+	}
+	// 键 b（在 a 系列断言全部完成后创建——修订号从 7 起，不干扰上面断言）
+	if res := svc.PutKey("OPS", "b", b64("new"), "create", 0); !res.Ok() {
+		t.Fatalf("create fresh: %+v", res)
+	}
+	// 列表（MetaOnly 语义，2 键）+ 批量值补齐（含缺失键 NotFound 路径）
+	kl = svc.ListKeys("OPS")
+	if !kl.Ok() || len(kl.Keys) != 2 {
+		t.Fatalf("list: %+v", kl)
+	}
+	gv := svc.GetKeyValues("OPS", []string{"a", "missing"})
+	if !gv.Ok() || len(gv.Values) != 2 || gv.Values[0].PayloadSize != 2 || gv.Values[1].NotFound != true {
+		t.Fatalf("values: %+v", gv)
+	}
+	// revert 无历史（键 b 仅 1 次修订，§6.8 异常 3 Go 半边）
+	if res := svc.RevertKey("OPS", "b"); res.ErrorCode != CodeValidation || !strings.Contains(res.Error, ErrNoHistory.Error()) {
+		t.Fatalf("no-history: %+v", res)
+	}
+	// purge（彻底清除）→ 历史只剩 marker
+	if res := svc.DeleteKey("OPS", "a", "purge"); !res.Ok() {
+		t.Fatalf("purge: %+v", res)
+	}
+}
+
+// TestKvKeyLifecycleLocalServer 在长驻本地服务器上复跑键全链路（桶名带
+// uniqueSuffix——共享服务器承载其他桶，但桶级流序列隔离，修订断言不受影响）。
+func TestKvKeyLifecycleLocalServer(t *testing.T) {
+	nc := testutil.ConnectLocalServer(t)
+	svc := newSvcConn(t, nc)
+	name := "OPS_" + uniqueSuffix()
+	t.Cleanup(func() { _ = svc.DeleteKvBucket(name) }) // 尽力清理；失败（已删/不存在）不影响断言
+
+	if res := svc.CreateKvBucket(KvBucketForm{Name: name, History: 10, Replicas: 1}); !res.Ok() {
+		t.Fatalf("create: %+v", res)
+	}
+	r1 := svc.PutKey(name, "a", b64("v1"), "put", 0)
+	if !r1.Ok() || r1.Revision != 1 {
+		t.Fatalf("put1: %+v", r1)
+	}
+	r2 := svc.PutKey(name, "a", b64("v2"), "put", 0)
+	if !r2.Ok() || r2.Revision != 2 {
+		t.Fatalf("put2: %+v", r2)
+	}
+	// create 冲突：错误文本 = 服务器原文前置 + 指引
+	if res := svc.PutKey(name, "a", b64("x"), "create", 0); res.ErrorCode != CodeConflict || !strings.Contains(res.Error, "可改用 put 或查看现有值") {
+		t.Fatalf("create conflict: %+v", res)
+	}
+	// update 期望不符 → conflict + CurrentRevision 回读
+	if res := svc.PutKey(name, "a", b64("v3"), "update", 1); res.ErrorCode != CodeConflict || res.CurrentRevision != 2 {
+		t.Fatalf("update conflict: %+v", res)
+	}
+	if r3 := svc.PutKey(name, "a", b64("v3"), "update", 2); !r3.Ok() || r3.Revision != 3 {
+		t.Fatalf("update ok: %+v", r3)
+	}
+	h := svc.GetKeyHistory(name, "a")
+	if !h.Ok() || len(h.Entries) != 3 || h.Entries[0].Revision != 1 {
+		t.Fatalf("history: %+v", h)
+	}
+	if r4 := svc.RevertKey(name, "a"); !r4.Ok() || r4.Revision != 4 {
+		t.Fatalf("revert: %+v", r4)
+	}
+	v := svc.GetKeyValues(name, []string{"a"})
+	if string(mustB64(v.Values[0].PayloadB64)) != "v2" {
+		t.Fatalf("revert value: %+v", v.Values[0])
+	}
+	if res := svc.DeleteKey(name, "a", "delete"); !res.Ok() {
+		t.Fatalf("del: %+v", res)
+	}
+	kl := svc.ListKeys(name)
+	if idx := findKey(kl.Keys, "a"); idx < 0 || kl.Keys[idx].Operation != "delete" {
+		t.Fatalf("after del: %+v", kl.Keys)
+	}
+	if h = svc.GetKeyHistory(name, "a"); !h.Ok() || len(h.Entries) != 5 {
+		t.Fatalf("history after del: %+v", h)
+	}
+	if r6 := svc.RevertKey(name, "a"); !r6.Ok() || r6.Revision != 6 {
+		t.Fatalf("revert after delete: %+v", r6)
+	}
+	v = svc.GetKeyValues(name, []string{"a"})
+	if string(mustB64(v.Values[0].PayloadB64)) != "v2" {
+		t.Fatalf("revert-after-delete value: %+v", v.Values[0])
+	}
+	if res := svc.PutKey(name, "b", b64("new"), "create", 0); !res.Ok() {
+		t.Fatalf("create fresh: %+v", res)
+	}
+	kl = svc.ListKeys(name)
+	if !kl.Ok() || len(kl.Keys) != 2 {
+		t.Fatalf("list: %+v", kl)
+	}
+	gv := svc.GetKeyValues(name, []string{"a", "missing"})
+	if !gv.Ok() || len(gv.Values) != 2 || gv.Values[0].PayloadSize != 2 || gv.Values[1].NotFound != true {
+		t.Fatalf("values: %+v", gv)
+	}
+	if res := svc.RevertKey(name, "b"); res.ErrorCode != CodeValidation || !strings.Contains(res.Error, ErrNoHistory.Error()) {
+		t.Fatalf("no-history: %+v", res)
+	}
+	if res := svc.DeleteKey(name, "a", "purge"); !res.Ok() {
+		t.Fatalf("purge: %+v", res)
 	}
 }

@@ -83,6 +83,213 @@ export class CallResult {
     }
 }
 
+export class GetKeyHistoryResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "entries": KeyHistoryEntry[];
+
+    /** Creates a new GetKeyHistoryResult instance. */
+    constructor($$source: Partial<GetKeyHistoryResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("entries" in $$source)) {
+            this["entries"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new GetKeyHistoryResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): GetKeyHistoryResult {
+        const $$createField2_0 = $$createType2;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("entries" in $$parsedSource) {
+            $$parsedSource["entries"] = $$createField2_0($$parsedSource["entries"]);
+        }
+        return new GetKeyHistoryResult($$parsedSource as Partial<GetKeyHistoryResult>);
+    }
+}
+
+export class GetKeyValuesResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "values": KeyValueOut[];
+
+    /** Creates a new GetKeyValuesResult instance. */
+    constructor($$source: Partial<GetKeyValuesResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("values" in $$source)) {
+            this["values"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new GetKeyValuesResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): GetKeyValuesResult {
+        const $$createField2_0 = $$createType4;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("values" in $$parsedSource) {
+            $$parsedSource["values"] = $$createField2_0($$parsedSource["values"]);
+        }
+        return new GetKeyValuesResult($$parsedSource as Partial<GetKeyValuesResult>);
+    }
+}
+
+export class KeyHistoryEntry {
+    "revision": number;
+    "payload_b64": string;
+    "payload_size": number;
+    "is_utf8": boolean;
+    "created_ms": number;
+    "operation": string;
+
+    /** Creates a new KeyHistoryEntry instance. */
+    constructor($$source: Partial<KeyHistoryEntry> = {}) {
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+        if (!("payload_b64" in $$source)) {
+            this["payload_b64"] = "";
+        }
+        if (!("payload_size" in $$source)) {
+            this["payload_size"] = 0;
+        }
+        if (!("is_utf8" in $$source)) {
+            this["is_utf8"] = false;
+        }
+        if (!("created_ms" in $$source)) {
+            this["created_ms"] = 0;
+        }
+        if (!("operation" in $$source)) {
+            this["operation"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new KeyHistoryEntry instance from a string or object.
+     */
+    static createFrom($$source: any = {}): KeyHistoryEntry {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new KeyHistoryEntry($$parsedSource as Partial<KeyHistoryEntry>);
+    }
+}
+
+/**
+ * KeyMeta: 键名+元数据（列表用，值另行批量补齐）。
+ */
+export class KeyMeta {
+    "key": string;
+    "revision": number;
+    "created_ms": number;
+
+    /**
+     * put | delete | purge
+     */
+    "operation": string;
+
+    /** Creates a new KeyMeta instance. */
+    constructor($$source: Partial<KeyMeta> = {}) {
+        if (!("key" in $$source)) {
+            this["key"] = "";
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+        if (!("created_ms" in $$source)) {
+            this["created_ms"] = 0;
+        }
+        if (!("operation" in $$source)) {
+            this["operation"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new KeyMeta instance from a string or object.
+     */
+    static createFrom($$source: any = {}): KeyMeta {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new KeyMeta($$parsedSource as Partial<KeyMeta>);
+    }
+}
+
+/**
+ * KeyValueOut: 批量值补齐的单键结果；缺失键 NotFound=true（键在列表后被删）。
+ */
+export class KeyValueOut {
+    "key": string;
+    "revision": number;
+    "payload_b64": string;
+    "payload_size": number;
+    "is_utf8": boolean;
+    "created_ms": number;
+    "operation": string;
+    "not_found": boolean;
+
+    /** Creates a new KeyValueOut instance. */
+    constructor($$source: Partial<KeyValueOut> = {}) {
+        if (!("key" in $$source)) {
+            this["key"] = "";
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+        if (!("payload_b64" in $$source)) {
+            this["payload_b64"] = "";
+        }
+        if (!("payload_size" in $$source)) {
+            this["payload_size"] = 0;
+        }
+        if (!("is_utf8" in $$source)) {
+            this["is_utf8"] = false;
+        }
+        if (!("created_ms" in $$source)) {
+            this["created_ms"] = 0;
+        }
+        if (!("operation" in $$source)) {
+            this["operation"] = "";
+        }
+        if (!("not_found" in $$source)) {
+            this["not_found"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new KeyValueOut instance from a string or object.
+     */
+    static createFrom($$source: any = {}): KeyValueOut {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new KeyValueOut($$parsedSource as Partial<KeyValueOut>);
+    }
+}
+
 /**
  * KvBucketForm: 数值字段 0 = 不设置（服务器默认），-1 = 无限制（ttl_seconds 仅 ≥0）。
  */
@@ -240,8 +447,8 @@ export class ListBucketsResult {
      * Creates a new ListBucketsResult instance from a string or object.
      */
     static createFrom($$source: any = {}): ListBucketsResult {
-        const $$createField2_0 = $$createType2;
-        const $$createField3_0 = $$createType4;
+        const $$createField2_0 = $$createType6;
+        const $$createField3_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("kv_buckets" in $$parsedSource) {
             $$parsedSource["kv_buckets"] = $$createField2_0($$parsedSource["kv_buckets"]);
@@ -250,6 +457,43 @@ export class ListBucketsResult {
             $$parsedSource["obj_buckets"] = $$createField3_0($$parsedSource["obj_buckets"]);
         }
         return new ListBucketsResult($$parsedSource as Partial<ListBucketsResult>);
+    }
+}
+
+export class ListKeysResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "keys": KeyMeta[];
+
+    /** Creates a new ListKeysResult instance. */
+    constructor($$source: Partial<ListKeysResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("keys" in $$source)) {
+            this["keys"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ListKeysResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ListKeysResult {
+        const $$createField2_0 = $$createType10;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("keys" in $$parsedSource) {
+            $$parsedSource["keys"] = $$createField2_0($$parsedSource["keys"]);
+        }
+        return new ListKeysResult($$parsedSource as Partial<ListKeysResult>);
     }
 }
 
@@ -294,9 +538,55 @@ export class ObjBucketSummary {
     }
 }
 
+/**
+ * PutKeyResult: revision 为新修订号；冲突时 CurrentRevision 填当前修订（§6.8 异常 2）。
+ */
+export class PutKeyResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "revision": number;
+    "current_revision": number;
+
+    /** Creates a new PutKeyResult instance. */
+    constructor($$source: Partial<PutKeyResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+        if (!("current_revision" in $$source)) {
+            this["current_revision"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PutKeyResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): PutKeyResult {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PutKeyResult($$parsedSource as Partial<PutKeyResult>);
+    }
+}
+
 // Private type creation functions
 const $$createType0 = KvBucketForm.createFrom;
-const $$createType1 = KvBucketSummary.createFrom;
+const $$createType1 = KeyHistoryEntry.createFrom;
 const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = ObjBucketSummary.createFrom;
+const $$createType3 = KeyValueOut.createFrom;
 const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = KvBucketSummary.createFrom;
+const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = ObjBucketSummary.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = KeyMeta.createFrom;
+const $$createType10 = $Create.Array($$createType9);
