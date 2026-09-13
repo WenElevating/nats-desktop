@@ -46,6 +46,10 @@ type MonitorService struct {
 	known map[string]MonitorServerRow // 跨周期已知服务器（离线标记）
 
 	sysWatches sysWatchRegistry // $SYS 事件 watch 注册表（Task 7；零值可用）
+
+	// 集群危险操作单飞（Task 8；clusterops.go 持有，key=op+"\x00"+target）。
+	opsMu       sync.Mutex
+	opsInFlight map[string]bool
 }
 
 func NewMonitorService(mgr connSource, log *slog.Logger, emit func(name string, data any), settingsPath string) *MonitorService {
