@@ -68,6 +68,14 @@ func writeFastPollSettings(t *testing.T) string {
 // 单节点（系统账户）：collectSnapshot 得 1 行在线、角色/版本/连接数齐备。
 func TestSnapshotSingleSysServer(t *testing.T) {
 	f := testutil.StartSysServer(t)
+	// UptimeSeconds 向下取整为整秒（floor(now-Start)）：服务器运行不足 1s 时恒为 0，先等满 ~1.1s 再采集。
+	varz, err := f.Srv.Varz(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wait := time.Until(varz.Start.Add(1100 * time.Millisecond)); wait > 0 {
+		time.Sleep(wait)
+	}
 	nc := testutil.ConnectUser(t, f.URL, f.SysUser, f.SysPass)
 	s, _ := newService(t, nc)
 
