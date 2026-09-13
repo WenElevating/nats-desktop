@@ -167,16 +167,24 @@ func StartCluster(t *testing.T, n int) Cluster {
 		nodes = append(nodes, ClusterNode{Name: o.ServerName, URL: s.ClientURL(), Srv: s, Opts: o})
 	}
 
-	waitClusterReady(t, nodes[0].URL, n)
 	// app 用户创建 JS 资产要求 APP 账户自身启用 JS（opts.JetStream 只是服务器
-	// 层开关，否则报 10039）；在任一节点启用即随系统账户传播全集群，取 seed。
-	appAcc, err := nodes[0].Srv.LookupAccount("APP")
-	if err != nil {
-		t.Fatal(err)
+	// 层开关，否则报 10039）。Account.EnableJetStream 只改**本服务器**的
+	// js.accounts 表（jetstream.go:1159 起的实现无任何对端广播——usage 通道
+	// 仅在两侧都已有 jsAccount 时工作），必须在每个节点逐个启用；只启用 seed
+	// 时，$JS.API 请求若由其他节点（如非 seed 的 meta leader）承接即报 10039。
+	// 放在 waitClusterReady 之前：启用会触发各节点向元组重发组信息，随后的
+	// 就绪等待一并吸收这次传播。
+	for _, nd := range nodes {
+		appAcc, err := nd.Srv.LookupAccount("APP")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := appAcc.EnableJetStream(nil, nil); err != nil {
+			t.Fatalf("enable JetStream on APP account at %s: %v", nd.Name, err)
+		}
 	}
-	if err := appAcc.EnableJetStream(nil, nil); err != nil {
-		t.Fatalf("enable JetStream on APP account: %v", err)
-	}
+
+	waitClusterReady(t, nodes[0].URL, n)
 	return Cluster{Nodes: nodes, SysUser: sysUser, SysPass: sysPass, AppUser: appUser, AppPass: appPass}
 }
 
@@ -207,9 +215,8 @@ func boot(t *testing.T, opts *server.Options) *server.Server {
 }
 
 // waitClusterReady 用客户端协议判据（与 natscli server ping / jsz 相同的
-// 面）：$SYS.REQ.SERVER.PING 广播应答数 == n（路由成型）；n>1 时任一 jsz
-// 应答的 Meta.Leader 非空（选举完成）。Server.ClusterInfo() 未导出，不能
-// 作为进程内判据。
+// 面）：$SYS.REQ.SERVER.PING 广播应答数 == n（路由成型）；n>1 时元集群完整
+// 成型（metaClusterFormed）。Server.ClusterInfo() 未导出，不能作为进程内判据。
 func waitClusterReady(t *testing.T, firstURL string, n int) {
 	t.Helper()
 	sysNc := ConnectUser(t, firstURL, sysUser, sysPass)
@@ -218,7 +225,7 @@ func waitClusterReady(t *testing.T, firstURL string, n int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		got, err := serverdata.CurrentActiveServers(ctx, sysNc, 2*time.Second, quietLogger{})
 		cancel()
-		if err == nil && got == n && (n == 1 || metaLeaderElected(sysNc)) {
+		if err == nil && got == n && (n == 1 || metaClusterFormed(sysNc, n)) {
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -226,18 +233,41 @@ func waitClusterReady(t *testing.T, firstURL string, n int) {
 	t.Fatalf("cluster did not form within 30s (want %d nodes)", n)
 }
 
-// metaLeaderElected 请求一次 jsz，检查 Meta.Leader 是否已选出（任一应答者
-// 的 jsz 都带 Meta 集群信息）。
-func metaLeaderElected(nc *nats.Conn) bool {
-	resp, err := nc.Request("$SYS.REQ.SERVER.PING.JSZ", []byte("{}"), 2*time.Second)
+// metaClusterFormed 判定元集群对「流放置」就绪：jsz 广播里 leader 自身应答的
+// 视角中，元组成员满员（leader + n-1 副本）且副本全部 Current。Current 意味着
+// leader 近期收到过该成员的 meta 组信息（nodeInfo 已登记）——selectPeerGroup
+// 只把登记过的节点当候选（「If we've never heard from a server, don't
+// consider」），仅等「leader 非空」会放过成员未登记完的窗口，紧随 fixture 之后的
+// NewStream 会偶发 10005 no suitable peers。非 leader 的应答视图不完整，跳过。
+func metaClusterFormed(nc *nats.Conn, n int) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resps, err := serverdata.DoReq(ctx, server.JszEventOptions{}, "$SYS.REQ.SERVER.PING.JSZ", n, nc, 2*time.Second, quietLogger{})
 	if err != nil {
 		return false
 	}
-	var jr server.ServerAPIJszResponse
-	if json.Unmarshal(resp.Data, &jr) != nil || jr.Data == nil {
-		return false
+	for _, raw := range resps {
+		var jr server.ServerAPIJszResponse
+		if json.Unmarshal(raw, &jr) != nil || jr.Data == nil || jr.Data.Meta == nil || jr.Server == nil {
+			continue
+		}
+		m := jr.Data.Meta
+		if m.Leader == "" || jr.Server.Name != m.Leader {
+			continue
+		}
+		if len(m.Replicas) != n-1 {
+			return false // leader 视角已到手但成员未满员——确定未成型
+		}
+		full := true
+		for _, r := range m.Replicas {
+			if r == nil || r.Offline || !r.Current {
+				full = false
+				break
+			}
+		}
+		return full
 	}
-	return jr.Data.Meta != nil && jr.Data.Meta.Leader != ""
+	return false
 }
 
 // ConnectUser 以指定用户连接并在测试结束后关闭。
