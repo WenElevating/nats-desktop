@@ -44,6 +44,8 @@ type MonitorService struct {
 	cycleBusy  atomic.Bool // 周期单飞：上一轮未完成跳过本次 tick（Global 1）
 
 	known map[string]MonitorServerRow // 跨周期已知服务器（离线标记）
+
+	sysWatches sysWatchRegistry // $SYS 事件 watch 注册表（Task 7；零值可用）
 }
 
 func NewMonitorService(mgr connSource, log *slog.Logger, emit func(name string, data any), settingsPath string) *MonitorService {
@@ -146,13 +148,13 @@ func (s *MonitorService) GetMonitoringSnapshot() MonitorSnapshot {
 	return s.last
 }
 
-// NotifyConnState：非 connected 一律停轮询（Task 7 在 syswatch.go 里为本
-// 方法追加 s.stopAllSysWatches() 一行——事件 watch 断连全停与 M4 对齐；
-// 此处刻意保留唯一入口，是那个改动的接缝）。
+// NotifyConnState：非 connected 一律停轮询并停全部 sys watch（事件 watch
+// 断连全停，与 M4 buckets watcher 对齐）。
 func (s *MonitorService) NotifyConnState(ev connections.StateEvent) {
 	if ev.State == connections.StateConnected {
 		return
 	}
 	_ = s.StopMonitoring()
+	s.stopAllSysWatches()
 	s.log.Warn("monitor polling stopped", "state", string(ev.State))
 }
