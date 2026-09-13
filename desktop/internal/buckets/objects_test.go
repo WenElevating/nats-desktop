@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/WenElevating/nats-desktop/desktop/internal/jsctx"
@@ -144,8 +145,9 @@ func TestObjBucketValidationAndErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 改名：源对象不存在 → not_found（nats.go 把不存在归一为 ErrUpdateMetaDeleted，
-	// 服务层还原 not_found）；目标名已占用 → conflict
+	// 改名：源对象不存在 → not_found（GetInfo 把缺失对象由 ErrMsgNotFound 归一为
+	// ErrObjectNotFound，服务层还原 not_found；ErrUpdateMetaDeleted 是 UpdateMeta
+	// 自己的 remap，此路径不会出现）；目标名已占用 → conflict
 	if res := svc.RenameObject("CFG", "ghost", "x"); res.ErrorCode != CodeNotFound {
 		t.Fatalf("rename missing: %+v", res)
 	}
@@ -314,9 +316,9 @@ func TestObjBucketAndObjectLifecycleLocalServer(t *testing.T) {
 
 // TestRenameObjectPreservesMetadata（Task 5 审查裁定 carry-in）：nats.go 的
 // UpdateMeta 以传入 meta **整体覆盖** Description/Headers/Metadata（零值即清空）
-// ——改名必须先 GetInfo 回填旧值，否则外部创建的带描述/元数据对象改名即静默
-// 丢元数据。直连 UpdateMeta 设置 Description+Metadata 后经服务层改名，断言
-// 全部存活。
+// ——改名必须先 GetInfo 回填旧值，否则外部创建的带描述/头/元数据对象改名即静默
+// 丢元数据。直连 UpdateMeta 设置 Description+Headers+Metadata 后经服务层改名，
+// 断言全部存活。
 func TestRenameObjectPreservesMetadata(t *testing.T) {
 	url := testutil.StartJSServer(t)
 	svc := newSvc(t, url)
@@ -339,6 +341,7 @@ func TestRenameObjectPreservesMetadata(t *testing.T) {
 	if err := osb.UpdateMeta(context.Background(), "ext.txt", jetstream.ObjectMeta{
 		Name:        "ext.txt",
 		Description: "外部创建",
+		Headers:     nats.Header{"X-Test": {"1"}},
 		Metadata:    map[string]string{"k": "v"},
 	}); err != nil {
 		t.Fatal(err)
@@ -350,7 +353,7 @@ func TestRenameObjectPreservesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Description != "外部创建" || info.Metadata["k"] != "v" {
+	if info.Description != "外部创建" || info.Metadata["k"] != "v" || info.Headers.Get("X-Test") != "1" {
 		t.Fatalf("metadata lost on rename: %+v", info.ObjectMeta)
 	}
 }

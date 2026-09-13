@@ -224,6 +224,7 @@ func (s *BucketService) UploadObject(bucket, path, rename string) CallResult {
 		Bucket:     bucket,
 		Name:       name,
 		Direction:  "upload",
+		Phase:      "running",
 		BytesTotal: total,
 	}
 	cr := &countingReader{r: f, th: newProgressThrottle(), fin: &finished, tpl: tpl, emit: s.emitObjTransfer}
@@ -324,6 +325,7 @@ func (s *BucketService) DownloadObject(bucket, name, dir string) CallResult {
 		Bucket:     bucket,
 		Name:       name,
 		Direction:  "download",
+		Phase:      "running",
 		BytesTotal: info.Size,
 	}
 	target := filepath.Join(dir, name)

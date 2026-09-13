@@ -210,8 +210,10 @@ func (s *BucketService) DeleteObject(bucket, name string) CallResult {
 // RenameObject 改名。注意 nats.go 的 UpdateMeta 以传入 meta **整体覆盖**元数据
 // （Description/Headers/Metadata 直接取传入值，零值即清空）——先 GetInfo 回填
 // 旧值再改名，避免外部创建的带描述/元数据对象在改名时被静默清空（Task 5 审查
-// 裁定）。源对象不存在/已删除 → not_found（nats.go 把不存在的 GetInfo 归一为
-// ErrUpdateMetaDeleted，服务层还原 not_found）；新名已被占用 → conflict。
+// 裁定）。源对象不存在/已删除 → not_found：GetInfo 先于 UpdateMeta，缺失对象
+// 在 nats.go 内部由 ErrMsgNotFound 归一为 ErrObjectNotFound（ErrUpdateMetaDeleted
+// 是 UpdateMeta 自己对 ErrObjectNotFound 的 remap，此路径不会出现），两个
+// sentinel 均经 classifyObjError 还原 not_found；新名已被占用 → conflict。
 func (s *BucketService) RenameObject(bucket, name, newName string) CallResult {
 	js, res := s.js()
 	if !res.Ok() {

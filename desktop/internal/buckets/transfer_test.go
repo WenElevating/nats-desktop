@@ -91,6 +91,11 @@ func TestUploadDownloadRoundTrip(t *testing.T) {
 	if last.Direction != "upload" || last.Name != "blob.bin" || last.TransferId == "" {
 		t.Fatalf("upload event shape: %+v", last)
 	}
+	// 每方向首事件必须携带 running 相位（types.go phase enum；M3 backup.go 初始
+	// emit 同款，对齐「初始 running」注释——相位不可为空串）
+	if ups := log.phases("TR", "upload"); len(ups) == 0 || ups[0] != "running" {
+		t.Fatalf("upload first event phase: %v", ups)
+	}
 	// 下载到另一目录 → SHA256 一致（digest_match=true，AC-014）
 	dst := t.TempDir()
 	if res := svc.DownloadObject("TR", "blob.bin", dst); !res.Ok() {
@@ -109,6 +114,9 @@ func TestUploadDownloadRoundTrip(t *testing.T) {
 	}
 	if dlLast.Direction != "download" || dlLast.BytesTotal != 2<<20 || dlLast.BytesDone != 2<<20 {
 		t.Fatalf("download event shape: %+v", dlLast)
+	}
+	if downs := log.phases("TR", "download"); len(downs) == 0 || downs[0] != "running" {
+		t.Fatalf("download first event phase: %v", downs)
 	}
 }
 
