@@ -24,6 +24,10 @@ Run from this directory (`desktop/`):
 - `go test ./...` — Go unit tests
 - `npm test` — frontend tests, run from `frontend/` (includes the i18n
   completeness gate)
+- `go run ./cmd/testcluster` — **test tool, not product surface**: starts a
+  3-node JetStream cluster (SYS/APP accounts) for manual / UIA smoke runs
+  against the monitoring and cluster-danger-ops pages; Ctrl-C exits. It is
+  never shipped with the app.
 
 ## Contributing
 
