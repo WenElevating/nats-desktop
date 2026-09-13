@@ -1,10 +1,17 @@
 import { useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { useTranslation } from "../../app/i18n";
+import { useConnState } from "../../app/connstate";
 import { formatBytes } from "../messages/schema";
 import { formatRate } from "./rates";
 import { Sparkline } from "./Sparkline";
-import type { StreamDetail as StreamDetailModel } from "../../lib/bindings";
+import type {
+  ClusterOpResult,
+  StreamDetail as StreamDetailModel,
+} from "../../lib/bindings";
+import { StreamBalance, StreamPeerRemove, StreamStepDown } from "../../lib/bindings";
+import { DangerOpDialog } from "../monitoring/DangerOpDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -44,6 +51,13 @@ function formatTime(ms: number): string {
   return ms > 0 ? new Date(ms).toLocaleString() : "—";
 }
 
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+const elapsedSec = (res: ClusterOpResult): string => `${(res.elapsed_ms / 1000).toFixed(1)}s`;
+
+/** Stream-side cluster ops (M3 deferral, closed in Task 12). */
+type ClusterOpKey = "stream_step_down" | "stream_peer_remove" | "stream_balance";
+
 function Stat({ id, label, value }: { id: string; label: string; value: string }) {
   return (
     <div
@@ -79,7 +93,72 @@ export function StreamDetail({
   busy,
 }: StreamDetailProps) {
   const { t } = useTranslation();
+  const conn = useConnState();
+  const connected = conn.state === "connected";
   const [windowMs, setWindowMs] = useState<number>(WINDOWS[0].ms);
+
+  // Cluster ops (M3 deferral): the L2 dialog + in-flight state. The row and
+  // the dialog render only for clustered streams (detail.cluster present).
+  const [opsDialog, setOpsDialog] = useState<ClusterOpKey | null>(null);
+  const [opsPending, setOpsPending] = useState<ClusterOpKey | null>(null);
+  const [peerChoice, setPeerChoice] = useState("");
+
+  /** Runs one stream cluster op with the same toast contract as the
+   * monitoring DangerZone: conflict → "in progress", other failures → the
+   * server 原文, success → leader/count + elapsed. */
+  const runClusterOp = async (
+    key: ClusterOpKey,
+    call: () => Promise<ClusterOpResult>,
+    done: (res: ClusterOpResult) => string,
+  ) => {
+    setOpsPending(key);
+    try {
+      const res = await call();
+      if (!res || res.error_code) {
+        if (res?.error_code === "conflict") toast.error(t("clusterOps.conflict"));
+        else toast.error(t("clusterOps.failed", { error: res?.error || res?.error_code || "" }));
+      } else {
+        toast.success(done(res));
+      }
+    } catch (err) {
+      toast.error(t("clusterOps.failed", { error: errText(err) }));
+    } finally {
+      setOpsPending(null);
+      setOpsDialog(null);
+    }
+  };
+
+  const noteSuffix = (res: ClusterOpResult): string => (res.note ? ` · ${res.note}` : "");
+
+  const onClusterOpConfirm = () => {
+    if (!detail || !opsDialog || opsPending) return;
+    const name = detail.summary.name;
+    if (opsDialog === "stream_step_down") {
+      void runClusterOp(
+        "stream_step_down",
+        () => StreamStepDown(name),
+        (res) =>
+          t("clusterOps.done.stepDown", {
+            old: res.old_leader,
+            next: res.new_leader || "—",
+            elapsed: elapsedSec(res),
+          }) + noteSuffix(res),
+      );
+    } else if (opsDialog === "stream_balance") {
+      void runClusterOp(
+        "stream_balance",
+        () => StreamBalance(name),
+        (res) => t("clusterOps.done.balance", { count: res.streams_balanced, elapsed: elapsedSec(res) }),
+      );
+    } else {
+      const peer = peerChoice;
+      void runClusterOp(
+        "stream_peer_remove",
+        () => StreamPeerRemove(name, peer),
+        (res) => t("clusterOps.done.peerRemove", { peer, elapsed: elapsedSec(res) }) + noteSuffix(res),
+      );
+    }
+  };
 
   const values = useMemo(
     () => series(windowMs, SERIES_BUCKETS),
@@ -241,7 +320,9 @@ export function StreamDetail({
         </div>
       )}
 
-      {/* Cluster placement */}
+      {/* Cluster placement + the cluster-ops entry (M3 deferral, Task 12):
+          three L2 ops reusing the monitoring DangerOpDialog. Single-node
+          streams (cluster === null) render neither the section nor the row. */}
       {detail.cluster && (
         <div className="flex flex-col gap-1 text-xs">
           <h3 className="text-sm font-medium">{t("streams.detail.cluster")}</h3>
@@ -260,7 +341,119 @@ export function StreamDetail({
               <span className="text-[var(--danger-fg)]">{t("streams.leaderMissing")}</span>
             )}
           </div>
+          <div
+            data-testid="stream-cluster-ops"
+            className="flex flex-wrap items-center gap-1.5"
+          >
+            <span className="text-[var(--fg-muted)]">{t("clusterOps.entry")}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="stream-cluster-stepdown"
+              disabled={!connected || opsPending !== null || detail.cluster.leader === ""}
+              title={detail.cluster.leader === "" ? t("clusterOps.noLeader") : undefined}
+              onClick={() => setOpsDialog("stream_step_down")}
+              className="h-6 px-2 text-xs"
+            >
+              {t("clusterOps.op.stepDown")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="stream-cluster-peer-remove"
+              disabled={
+                !connected ||
+                opsPending !== null ||
+                (detail.cluster.peers ?? []).length === 0
+              }
+              onClick={() => {
+                const peers = detail.cluster?.peers ?? [];
+                setPeerChoice(
+                  peers.find((p) => p.name !== detail.cluster?.leader)?.name ??
+                    peers[0]?.name ??
+                    "",
+                );
+                setOpsDialog("stream_peer_remove");
+              }}
+              className="h-6 px-2 text-xs"
+            >
+              {t("clusterOps.op.peerRemove")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="stream-cluster-balance"
+              disabled={!connected || opsPending !== null}
+              onClick={() => setOpsDialog("stream_balance")}
+              className="h-6 px-2 text-xs"
+            >
+              {t("clusterOps.op.balance")}
+            </Button>
+            {opsPending && (
+              <Loader2 size={12} className="animate-spin text-[var(--fg-muted)]" aria-hidden="true" />
+            )}
+          </div>
         </div>
+      )}
+
+      {/* Cluster op L2 dialog (name-match always enforced; conflict/failure
+          toasts mirror the monitoring DangerZone). */}
+      {detail.cluster && opsDialog && (
+        <DangerOpDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setOpsDialog(null);
+          }}
+          op={opsDialog}
+          title={t(
+            opsDialog === "stream_step_down"
+              ? "clusterOps.streamStepDown"
+              : opsDialog === "stream_balance"
+                ? "clusterOps.balance"
+                : "clusterOps.peerRemove",
+          )}
+          impactLines={(
+            opsDialog === "stream_step_down"
+              ? ["clusterOps.impact.streamStepDown.a", "clusterOps.impact.streamStepDown.b"]
+              : opsDialog === "stream_balance"
+                ? ["clusterOps.impact.balance.a", "clusterOps.impact.balance.b"]
+                : [
+                    "clusterOps.impact.streamPeerRemove.a",
+                    "clusterOps.impact.streamPeerRemove.b",
+                  ]
+          ).map((k) => t(k))}
+          expectedName={
+            opsDialog === "stream_step_down"
+              ? detail.cluster.leader
+              : opsDialog === "stream_balance"
+                ? detail.summary.name
+                : peerChoice
+          }
+          inFlight={opsPending !== null}
+          extra={
+            opsDialog === "stream_peer_remove" ? (
+              <label className="flex items-center gap-2 text-xs">
+                <span className="text-[var(--fg-muted)]">{t("clusterOps.peer")}</span>
+                <select
+                  data-testid="stream-cluster-peer"
+                  value={peerChoice}
+                  onChange={(e) => setPeerChoice(e.target.value)}
+                  className="h-7 rounded-md border border-border bg-background px-1.5 font-mono text-xs"
+                >
+                  {(detail.cluster?.peers ?? []).map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                      {p.name === detail.cluster?.leader
+                        ? ` ${t("clusterOps.leaderSuffix")}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : undefined
+          }
+          onConfirm={onClusterOpConfirm}
+        />
       )}
     </div>
   );

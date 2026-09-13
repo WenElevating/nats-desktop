@@ -7,13 +7,12 @@ import { ServerTable } from "./ServerTable";
 import { NodeDetail } from "./NodeDetail";
 import { ConnectionsTop } from "./ConnectionsTop";
 import { AccountsPanel } from "./AccountsPanel";
+import { EventsPanel } from "./EventsPanel";
+import { DangerZone } from "./DangerZone";
 import { Button } from "@/components/ui/button";
 
-// Task 11 ships the node/connections/accounts panels; events + the danger
-// zone land in Task 12 and stay disabled placeholders until then.
 const TABS = ["node", "connections", "events", "accounts", "danger"] as const;
 type TabId = (typeof TABS)[number];
-const DISABLED_TABS: readonly TabId[] = ["events", "danger"];
 
 /**
  * Monitoring page shell (spec §6.10): toolbar (interval chip, pause/resume,
@@ -105,13 +104,12 @@ export function MonitoringPage() {
         <ServerTable snapshot={snap} selected={mon.selected} onSelect={mon.setSelected} />
       </div>
 
-      {/* Lower tab area: the on-demand report panels (Task 11) + the Task 12
-          placeholders. A fixed-height strip keeps the server table dominant
-          while every panel scrolls internally. */}
+      {/* Lower tab area: the on-demand report panels (Task 11) + the event
+          stream and danger zone (Task 12). A fixed-height strip keeps the
+          server table dominant while every panel scrolls internally. */}
       <div className="flex h-64 shrink-0 flex-col border-t border-border px-3 py-2">
         <div role="tablist" aria-label={t("monitor.label")} className="flex shrink-0 gap-1">
           {TABS.map((id) => {
-            const disabled = DISABLED_TABS.includes(id);
             const active = tab === id;
             return (
               <button
@@ -120,14 +118,12 @@ export function MonitoringPage() {
                 role="tab"
                 data-testid={`monitor-tab-${id}`}
                 aria-selected={active}
-                disabled={disabled}
-                title={disabled ? t("monitor.tabPlaceholder") : undefined}
                 onClick={() => setTab(id)}
                 className={`rounded-md px-2.5 py-1 text-xs ${
                   active
                     ? "bg-[var(--accent-soft)] font-medium text-[var(--accent-strong)]"
                     : "text-[var(--fg-muted)] hover:text-foreground"
-                } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+                }`}
               >
                 {t(`monitor.tab.${id}`)}
               </button>
@@ -139,10 +135,12 @@ export function MonitoringPage() {
             <NodeDetail server={mon.selected} />
           ) : tab === "connections" ? (
             <ConnectionsTop server={mon.selected} />
+          ) : tab === "events" ? (
+            <EventsPanel />
           ) : tab === "accounts" ? (
             <AccountsPanel />
           ) : (
-            <p className="p-4 text-xs text-[var(--fg-faint)]">{t("monitor.tabPlaceholder")}</p>
+            <DangerZone snapshot={snap} />
           )}
         </div>
       </div>

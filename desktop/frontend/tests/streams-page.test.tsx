@@ -26,6 +26,9 @@ vi.mock("../src/lib/bindings", () => ({
   ListStreams: vi.fn(),
   GetStreamDetail: vi.fn(),
   GetSettings: vi.fn(),
+  StreamStepDown: vi.fn(),
+  StreamPeerRemove: vi.fn(),
+  StreamBalance: vi.fn(),
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -436,4 +439,106 @@ it("renders only the virtual window of a 10k-stream list", async () => {
 
   expect(rows().length).toBeGreaterThan(0);
   expect(rows().length).toBeLessThan(100);
+});
+
+// ---- cluster ops entry (M3 deferral, closed in Task 12) ----
+
+const clusteredDetail = (): StreamDetail =>
+  ({
+    ...detailFixture(),
+    cluster: {
+      name: "c1",
+      raft_group: "ORDERS",
+      leader: "nats-a",
+      leader_since_ms: 1_000,
+      peers: [
+        { name: "nats-a", current: true, offline: false, active_ms: 100, lag: 0 },
+        { name: "nats-b", current: false, offline: false, active_ms: 100, lag: 0 },
+      ],
+    },
+  }) as unknown as StreamDetail;
+
+it("renders the cluster-ops row (three L2 entry buttons) only for clustered streams", async () => {
+  vi.mocked(GetStreamDetail).mockResolvedValue(clusteredDetail() as never);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByTestId("stream-row-ORDERS"));
+  await flush();
+
+  expect(screen.getByTestId("stream-cluster-ops").textContent).toContain("Cluster ops");
+  expect((screen.getByTestId("stream-cluster-stepdown") as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByTestId("stream-cluster-peer-remove") as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByTestId("stream-cluster-balance") as HTMLButtonElement).disabled).toBe(false);
+
+  // Single-node stream (cluster === null): neither the cluster section nor the
+  // ops row renders.
+  vi.mocked(GetStreamDetail).mockResolvedValue(detailFixture() as never);
+  fireEvent.click(screen.getByTestId("stream-row-KV_BUCKETS"));
+  await flush();
+  expect(screen.queryByTestId("stream-cluster-ops")).toBeNull();
+  expect(screen.queryByTestId("stream-detail-cluster")).toBeNull();
+});
+
+it("a clustered stream without an observed leader keeps step-down disabled", async () => {
+  const c = clusteredDetail();
+  vi.mocked(GetStreamDetail).mockResolvedValue({
+    ...c,
+    cluster: { ...(c.cluster as object), leader: "" },
+  } as never);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByTestId("stream-row-ORDERS"));
+  await flush();
+
+  expect((screen.getByTestId("stream-cluster-stepdown") as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByTestId("stream-cluster-balance") as HTMLButtonElement).disabled).toBe(false);
+});
+
+it("peer remove opens the shared L2 dialog with the peer picker and calls StreamPeerRemove", async () => {
+  const { StreamPeerRemove } = await import("../src/lib/bindings");
+  vi.mocked(StreamPeerRemove).mockResolvedValue({
+    error_code: "",
+    error: "",
+    old_leader: "",
+    new_leader: "",
+    streams_balanced: 0,
+    note: "",
+    elapsed_ms: 700,
+  } as never);
+  vi.mocked(GetStreamDetail).mockResolvedValue(clusteredDetail() as never);
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
+  await flush();
+  fireEvent.click(screen.getByTestId("stream-row-ORDERS"));
+  await flush();
+
+  fireEvent.click(screen.getByTestId("stream-cluster-peer-remove"));
+  await flush();
+
+  const dialog = screen.getByTestId("danger-op-dialog");
+  expect(dialog.getAttribute("data-op")).toBe("stream_peer_remove");
+  // The picker defaults to the first non-leader peer; confirm stays gated on
+  // the exact name.
+  const select = screen.getByTestId("stream-cluster-peer") as HTMLSelectElement;
+  expect(select.value).toBe("nats-b");
+  expect((screen.getByTestId("danger-op-confirm") as HTMLButtonElement).disabled).toBe(true);
+
+  fireEvent.change(screen.getByTestId("danger-op-input"), { target: { value: "nats-b" } });
+  fireEvent.click(screen.getByTestId("danger-op-confirm"));
+  await flush();
+
+  expect(StreamPeerRemove).toHaveBeenCalledTimes(1);
+  expect(StreamPeerRemove).toHaveBeenCalledWith("ORDERS", "nats-b");
+  expect(toast.success).toHaveBeenCalledWith(expect.stringContaining("nats-b"));
 });
