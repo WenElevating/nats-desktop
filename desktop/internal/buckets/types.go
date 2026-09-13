@@ -95,6 +95,14 @@ type BucketDetailResult struct {
 	CreatedMs int64        `json:"created_ms"`
 }
 
+// ObjBucketDetailResult: 对象桶详情（GetObjBucketDetail）——表单回显 + 封存
+// 状态（封存桶前端禁用上传/编辑，§6.9 异常 3）。
+type ObjBucketDetailResult struct {
+	CallResult
+	Form   ObjBucketForm `json:"form"`
+	Sealed bool          `json:"sealed"`
+}
+
 // KeyMeta: 键名+元数据（列表用，值另行批量补齐）。
 type KeyMeta struct {
 	Key       string `json:"key"`

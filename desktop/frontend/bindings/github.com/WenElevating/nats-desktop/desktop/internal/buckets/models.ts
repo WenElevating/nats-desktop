@@ -534,6 +534,129 @@ export class ListKeysResult {
     }
 }
 
+export class ListObjectsResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "objects": ObjectOut[];
+
+    /** Creates a new ListObjectsResult instance. */
+    constructor($$source: Partial<ListObjectsResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("objects" in $$source)) {
+            this["objects"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ListObjectsResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ListObjectsResult {
+        const $$createField2_0 = $$createType12;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("objects" in $$parsedSource) {
+            $$parsedSource["objects"] = $$createField2_0($$parsedSource["objects"]);
+        }
+        return new ListObjectsResult($$parsedSource as Partial<ListObjectsResult>);
+    }
+}
+
+/**
+ * ObjBucketDetailResult: 对象桶详情（GetObjBucketDetail）——表单回显 + 封存
+ * 状态（封存桶前端禁用上传/编辑，§6.9 异常 3）。
+ */
+export class ObjBucketDetailResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "form": ObjBucketForm;
+    "sealed": boolean;
+
+    /** Creates a new ObjBucketDetailResult instance. */
+    constructor($$source: Partial<ObjBucketDetailResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("form" in $$source)) {
+            this["form"] = (new ObjBucketForm());
+        }
+        if (!("sealed" in $$source)) {
+            this["sealed"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ObjBucketDetailResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ObjBucketDetailResult {
+        const $$createField2_0 = $$createType13;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("form" in $$parsedSource) {
+            $$parsedSource["form"] = $$createField2_0($$parsedSource["form"]);
+        }
+        return new ObjBucketDetailResult($$parsedSource as Partial<ObjBucketDetailResult>);
+    }
+}
+
+export class ObjBucketForm {
+    "name": string;
+    "description": string;
+
+    /**
+     * ≥-1
+     */
+    "max_bytes": number;
+
+    /**
+     * 1–5
+     */
+    "replicas": number;
+
+    /** Creates a new ObjBucketForm instance. */
+    constructor($$source: Partial<ObjBucketForm> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("description" in $$source)) {
+            this["description"] = "";
+        }
+        if (!("max_bytes" in $$source)) {
+            this["max_bytes"] = 0;
+        }
+        if (!("replicas" in $$source)) {
+            this["replicas"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ObjBucketForm instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ObjBucketForm {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ObjBucketForm($$parsedSource as Partial<ObjBucketForm>);
+    }
+}
+
 export class ObjBucketSummary {
     "name": string;
     "description": string;
@@ -572,6 +695,47 @@ export class ObjBucketSummary {
     static createFrom($$source: any = {}): ObjBucketSummary {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new ObjBucketSummary($$parsedSource as Partial<ObjBucketSummary>);
+    }
+}
+
+export class ObjectOut {
+    "name": string;
+    "size": number;
+    "chunks": number;
+    "digest": string;
+    "mod_time_ms": number;
+    "deleted": boolean;
+
+    /** Creates a new ObjectOut instance. */
+    constructor($$source: Partial<ObjectOut> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("size" in $$source)) {
+            this["size"] = 0;
+        }
+        if (!("chunks" in $$source)) {
+            this["chunks"] = 0;
+        }
+        if (!("digest" in $$source)) {
+            this["digest"] = "";
+        }
+        if (!("mod_time_ms" in $$source)) {
+            this["mod_time_ms"] = 0;
+        }
+        if (!("deleted" in $$source)) {
+            this["deleted"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ObjectOut instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ObjectOut {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ObjectOut($$parsedSource as Partial<ObjectOut>);
     }
 }
 
@@ -627,3 +791,6 @@ const $$createType7 = ObjBucketSummary.createFrom;
 const $$createType8 = $Create.Array($$createType7);
 const $$createType9 = KeyMeta.createFrom;
 const $$createType10 = $Create.Array($$createType9);
+const $$createType11 = ObjectOut.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = ObjBucketForm.createFrom;
