@@ -104,6 +104,39 @@ export type {
   StreamStateOut,
   StreamSummary,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/jsadmin/models.js";
+// KV half of the buckets surface (spec §6.8). The buckets package re-declares
+// CallResult with an identical shape — the jsadmin type above stays the app's
+// structural standard, so it is deliberately not re-exported twice here.
+export {
+  CompactKvBucket,
+  CreateKvBucket,
+  CreateKvWatch,
+  DeleteKey,
+  DeleteKvBucket,
+  GetKeyHistory,
+  GetKeyValues,
+  GetKvBucketDetail,
+  ListKeys,
+  ListKvBuckets,
+  PutKey,
+  RevertKey,
+  StopWatch,
+  UpdateKvBucket,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/bucketservice.js";
+export type {
+  BucketDetailResult,
+  CreateWatchResult,
+  GetKeyHistoryResult,
+  GetKeyValuesResult,
+  KeyHistoryEntry,
+  KeyMeta,
+  KeyValueOut,
+  KvBucketForm,
+  KvBucketSummary,
+  ListBucketsResult,
+  ListKeysResult,
+  PutKeyResult,
+} from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/models.js";
 
 // Default mirrors settings.Default() in internal/settings/settings.go.
 // Keep the field values in sync with the Go side.
