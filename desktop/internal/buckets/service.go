@@ -33,7 +33,7 @@ type BucketService struct {
 	log          *slog.Logger
 	emit         func(name string, data any)
 	settingsPath string
-	watches      *watchRegistry // Task 4 接入；本任务为 nil 安全
+	watches      *watchRegistry // KV/对象 watch 注册表（watch.go，Task 4）
 }
 
 // NewBucketService wires the facade onto the active connection. mgr is taken
@@ -46,13 +46,8 @@ func NewBucketService(mgr connSource, log *slog.Logger, emit func(name string, d
 	if emit == nil {
 		emit = func(string, any) {}
 	}
-	return &BucketService{mgr: mgr, log: log, emit: emit, settingsPath: settingsPath}
+	return &BucketService{mgr: mgr, log: log, emit: emit, settingsPath: settingsPath, watches: &watchRegistry{}}
 }
-
-// watchRegistry 占位：Task 4 在 watch.go 落地完整实现（mu/next/entries +
-// launch）时**删除本占位**以免重声明。本任务的绑定方法一律不触碰 s.watches
-// （nil 解引用安全——指针字段零值即 nil）。
-type watchRegistry struct{}
 
 // timeout reads the request timeout from settings on every call (spec §7.1.2:
 // behavior changes apply without restart); falls back to the 5s default when

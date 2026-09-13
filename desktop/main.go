@@ -78,13 +78,21 @@ func main() {
 	// guard covers the emit-before-construct window anyway.
 	reg, backend := connections.NewRegistryAndBackend()
 	var msgSvc *messaging.MessagingService
+	var bktSvc *buckets.BucketService
 	emit := func(name string, data any) {
 		if app := application.Get(); app != nil {
 			app.Event.Emit(name, data)
 		}
-		if name == connections.EventConnState && msgSvc != nil {
+		if name == connections.EventConnState {
 			if ev, ok := data.(connections.StateEvent); ok {
-				msgSvc.Sessions.NotifyConnState(ev)
+				if msgSvc != nil {
+					msgSvc.Sessions.NotifyConnState(ev)
+				}
+				// Watch 断连全停（Task 4）：非 connected 状态停掉全部 KV/对象
+				// watcher 并清空注册表；通知路径非阻塞，Manager emit 路径安全。
+				if bktSvc != nil {
+					bktSvc.NotifyConnState(ev)
+				}
 			}
 		}
 	}
@@ -98,9 +106,11 @@ func main() {
 
 	// Bucket management facade (KeyValue/Object Store, spec §6.8/§6.9):
 	// CallResult-embedding results over jetstream KV/OS handles keyed off the
-	// active connection's domain/API prefix. Task 4 side-bands conn:state
-	// into bucketSvc.NotifyConnState here (watch 断连全停).
+	// active connection's domain/API prefix. bktSvc is assigned right after
+	// construction so the emit closure's conn:state side-band (above) reaches
+	// NotifyConnState — watchers stop-all on disconnect/failure.
 	bucketSvc := buckets.NewBucketService(manager, logger, emit, settingsPath)
+	bktSvc = bucketSvc
 
 	// settings.LastActiveContext persistence: load-modify-save on every
 	// successful Connect (spec §6.1). Routed through settings.Update so it

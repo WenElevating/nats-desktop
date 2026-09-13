@@ -83,6 +83,43 @@ export class CallResult {
     }
 }
 
+/**
+ * CreateWatchResult：单结构体返回（Wails 多返回值序列化为 JSON 数组，破坏前端
+ * 既有 CallResult 消费模式）；WatchId 为注册表内递增的数字串。
+ */
+export class CreateWatchResult {
+    "error_code": string;
+
+    /**
+     * server原文 for server/validation errors
+     */
+    "error": string;
+    "watch_id": string;
+
+    /** Creates a new CreateWatchResult instance. */
+    constructor($$source: Partial<CreateWatchResult> = {}) {
+        if (!("error_code" in $$source)) {
+            this["error_code"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("watch_id" in $$source)) {
+            this["watch_id"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CreateWatchResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CreateWatchResult {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CreateWatchResult($$parsedSource as Partial<CreateWatchResult>);
+    }
+}
+
 export class GetKeyHistoryResult {
     "error_code": string;
 
