@@ -106,10 +106,13 @@ const settingsFixture = (poll: number) => ({
 
 const ok = { error_code: "", error: "" };
 
-// Drain the hook's async start/stop/read chain.
+// Drain the hook module's queued start/stop ops (promise-chain serializer)
+// plus the awaited reads inside each op — several microtask hops each.
 const flush = () =>
   act(async () => {
-    await Promise.resolve();
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
   });
 
 const fireSnapshot = (data: unknown) =>
@@ -136,10 +139,15 @@ beforeEach(() => {
   vi.mocked(GetMonitoringSnapshot).mockResolvedValue(snapshot() as never);
 });
 
-afterEach(() => {
+afterEach(async () => {
   // Drop the visibilityState own-property override (jsdom's prototype getter
   // takes over again).
   Reflect.deleteProperty(document, "visibilityState");
+  // Drain the hook module's op queue so a lifecycle transition left pending
+  // by this test cannot leak Start/Stop calls into the next test's counts.
+  for (let i = 0; i < 10; i++) {
+    await Promise.resolve();
+  }
 });
 
 // ---- lifecycle ----
@@ -160,19 +168,53 @@ it("applies monitor:snapshot events to the state", async () => {
   const { result } = renderHook(() => useMonitor());
   await flush();
 
+  // Healthy frames carry the merged server rows.
   await fireSnapshot(
     snapshot({
       polled_at_ms: 2_000,
       servers: [row(), row({ name: "nats2", connections: 9 })],
-      sys_available: false,
-      sys_reason: "system account required",
     }),
   );
 
   expect(result.current.snapshot?.polled_at_ms).toBe(2_000);
   expect(result.current.snapshot?.servers).toHaveLength(2);
+  expect(result.current.sysAvailable).toBe(true);
+});
+
+it("parses degraded event frames with servers null/[] (sys_available=false survives)", async () => {
+  const { result } = renderHook(() => useMonitor());
+  await flush();
+
+  // "servers":null — the nil-slice JSON shape Go emitted on degraded paths
+  // before the I-1 fix (legacy/zero-value frames still cross the wire this
+  // way). The gate must land the frame as an empty table, not drop it.
+  await fireSnapshot(
+    snapshot({
+      polled_at_ms: 2_000,
+      servers: null,
+      sys_available: false,
+      sys_reason: "nats: insufficient system privileges",
+    }),
+  );
+  expect(result.current.snapshot?.polled_at_ms).toBe(2_000);
+  expect(result.current.snapshot?.servers).toHaveLength(0);
   expect(result.current.sysAvailable).toBe(false);
-  expect(result.current.sysReason).toBe("system account required");
+  expect(result.current.sysReason).toBe("nats: insufficient system privileges");
+
+  // "servers":[] — the post-fix degraded wire shape (non-nil empty slice);
+  // the per-cycle §8.3.1 reason keeps refreshing the banner.
+  await fireSnapshot(
+    snapshot({
+      polled_at_ms: 3_000,
+      servers: [],
+      sys_available: false,
+      sys_reason: "no responders on $SYS.A",
+    }),
+  );
+  expect(result.current.snapshot?.polled_at_ms).toBe(3_000);
+  expect(result.current.snapshot?.servers).toHaveLength(0);
+  expect(result.current.sysAvailable).toBe(false);
+  expect(result.current.sysReason).toBe("no responders on $SYS.A");
 });
 
 it("drops malformed event payloads", async () => {
@@ -248,6 +290,35 @@ it("stops monitoring on unmount", async () => {
   vi.mocked(StopMonitoring).mockClear();
 
   unmount();
+  await flush(); // the stop is queued now — drain it before asserting
+  expect(StopMonitoring).toHaveBeenCalledTimes(1);
+});
+
+it("page-switch stop/start inversion drains to a started loop for the new page", async () => {
+  // Page A mounts and starts the shared Go poller.
+  const a = renderHook(() => useMonitor());
+  await flush();
+  expect(StartMonitoring).toHaveBeenCalledTimes(1);
+
+  // Page switch: A's unmount enqueues the stop, B's mount enqueues the
+  // start — the exact pair that raced inside Go at the IPC layer (final
+  // review I-2).
+  a.unmount();
+  const b = renderHook(() => useMonitor());
+  await flush();
+
+  // A's stale stop elided (its intent no longer matches the desired state B
+  // mounted with) and the loop is up for B.
+  expect(StopMonitoring).not.toHaveBeenCalled();
+  expect(StartMonitoring).toHaveBeenCalledTimes(2);
+
+  // B is live: snapshot events still reach the freshly mounted page.
+  await fireSnapshot(snapshot({ polled_at_ms: 9_000 }));
+  expect(b.result.current.snapshot?.polled_at_ms).toBe(9_000);
+
+  // B's final unmount is the last intent — its stop must land.
+  b.unmount();
+  await flush();
   expect(StopMonitoring).toHaveBeenCalledTimes(1);
 });
 

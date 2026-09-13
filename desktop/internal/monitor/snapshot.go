@@ -27,7 +27,14 @@ func (s *MonitorService) newLive(nc *nats.Conn, timeout time.Duration) (*serverd
 // 失败降级为 SysAvailable=false + 原文 reason（§8.3.1），绝不 panic。
 func (s *MonitorService) collectSnapshot() MonitorSnapshot {
 	start := time.Now()
-	snap := MonitorSnapshot{SysAvailable: true, PolledAtMs: start.UnixMilli(), PollIntervalSeconds: int(s.interval().Seconds())}
+	// Servers 初始化为非 nil 空 slice：降级早退路径的 JSON 恒为 "servers":[]
+	// 而非 null（终审 I-1——前端 schema 容忍 null，但事件线发送规范形状）。
+	snap := MonitorSnapshot{
+		SysAvailable:        true,
+		Servers:             []MonitorServerRow{},
+		PolledAtMs:          start.UnixMilli(),
+		PollIntervalSeconds: int(s.interval().Seconds()),
+	}
 
 	nc := s.mgr.Conn()
 	if nc == nil || !nc.IsConnected() {

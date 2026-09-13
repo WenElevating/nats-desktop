@@ -97,7 +97,7 @@ Go（`go test ./... -count=1 -cover`，2026-09-14 实测）：
 | c | 两轮周期数据刷新（AC-015 预期 2 前半） | **PASS** | S1 行两次读值：`6m33s 0.3% 23.6 MiB`（05:09:59）→ `6m43s 0.0% 24.4 MiB`（05:10:11）——uptime/CPU/内存随周期刷新；`data-polled-at` DOM 属性为前端测试锚点（monitoring-server-table/use-monitor 用例钉住），UIA 可见等价物即行内容跨周期变化；应用日志 `monitor snapshot servers=3 cycle_ms=610–626` 连续 25+ 周期无缺拍 |
 | d | 连接表 kick + 事件流 disconnect advisory（AC-016） | **PASS** | 选中 S1 → 「连接」页签 → 连接表（CID/IP/用户/账户/订阅/…/RTT 列头 + 行内「断开连接 {cid}」按钮 ×3）。UIA 点击 `断开连接 22`（cid 经 $SYS connz 请求预识别为受害者 m5-smoke-victim）→ **L1 确认框**「断开连接 22 / 连接 22 将在 S1 上被关闭，客户端可能会自行重连。」+ 取消/确认 → 确认 → 受害者进程立即打印 `VICTIM-DISCONNECTED: EOF`；应用日志 `kick connection server=S1 cid=22`。「事件」页签挂载（累计 0）→ 终止受害者进程 → **事件行实时出现**：`05:23:48.342 │ io.nats.server.advisory.v1.client_disconnect │ S2 │ APP · app@127.0.0.1 Read Error │ $SYS.ACCOUNT.APP.DISCONNECT │ 804`，计数「累计 1 / 丢弃 0 / 过滤 0」；5 个类型过滤按钮（account_connect/account_disconnect/auth_error/js_advisory/js_metric）+ 主题正则输入在列 |
 | e | 危险区 meta step-down 对话框（AC-017） | **PASS** | 「危险操作」页签：红色分离区 + 4 卡（元数据主降级/流主降级/均衡流分布/移除节点），「当前元数据主：S2」。点「元数据主降级」→ **L2 对话框**「输入 "S2" 以确认」+ 影响列表（重新选举数秒 / JS API 短暂不可用）+ 输入框 + 「名称不一致——请精确重新输入」。**错误名 `S1` → 「执行」DISABLED**（预期 1 实证）；**正确名 `S2` → 「执行」ENABLED** → 点击 → 执行成功、对话框关闭、**新 leader 上屏**：服务器表 `在线 S1 … 元数据主`、S2 变「投票成员」、危险卡「当前元数据主：S1」（预期 2 实证）；应用日志 `cluster op completed op=meta_stepdown code="" elapsed_ms=1127`。「操作期间按钮不可重复触发」半边由自动化覆盖（DangerZone inFlight 禁用 + Go 侧 op+target CAS 单飞 conflict，Task 8/12 测试） |
-| f | 附带观察：无系统账户降级面（§8.3.1）+ emoji 扫描 | **PASS（附带）** | 冒烟前应用以 local-test@4333（单节点无系统账户）自动恢复：Dashboard/监控呈现「系统账户不可用——集群级指标受限」+「其余功能不受影响——近期事件仍显示在下方」降级横幅（G3 的真应用实证）；切 sys 集群后横幅消失。对全部 UIA dump 做 emoji 码位扫描（U+1F300–1FAFF / 2600–27BF / 2B00–2BFF / FE0F）→ **零命中**（G7） |
+| f | 附带观察：无系统账户降级面（§8.3.1）+ emoji 扫描 | **PASS（附带）→ 机制已更正，live 腿待重跑** | 冒烟前应用以 local-test@4333（单节点无系统账户）自动恢复：Dashboard/监控呈现「系统账户不可用——集群级指标受限」+「其余功能不受影响——近期事件仍显示在下方」降级横幅（G3 的真应用实证）；切 sys 集群后横幅消失。对全部 UIA dump 做 emoji 码位扫描（U+1F300–1FAFF / 2600–27BF / 2B00–2BFF / FE0F）→ **零命中**（G7）。**【终审 I-1 注记】**机制更正：终审查明修复前轮询事件线**不可能**投递降级帧（Go 降级路径 `servers:null` 被前端 schema 门禁整体丢弃）——当时呈现的横幅实际经由绑定路径 `GetMonitoringSnapshot` 的**零值快照**（Wails 绑定层 null→[] 强转后可解析）读出，文案为**通用兜底（空 sys_reason → 兜底短语）且不随周期刷新**，并非 §8.3.1 的逐周期原文投递；附带副作用是健康集群每次新连接后约一个周期内先出现假降级横幅。修复波已改：Go 降级路径恒发 `"servers":[]`（`snapshot.go`）+ 前端 schema `servers` 列 `.nullable()`（null→[]，`schema.ts`）+ 事件线 `servers:null`/`[]` 两形用例钉住解析与 `sys_available=false` 存活（`monitoring-use-monitor.test.ts`）——修复后事件线按周期投递降级原因。**修复后本轮 live 腿未重跑**：标注「机制已更正，live 腿待重跑」，覆盖证据为上述自动化事件线用例 |
 
 冒烟小结：**6 行全 PASS（a–f），0 行 PENDING-MANUAL**——AC-015/016/017 三条 AC 的 UIA 腿全部走通，无锁屏不可驱动项残留（本轮冒烟页面无原生选择器/合成输入依赖）。
 
@@ -112,7 +112,7 @@ Go（`go test ./... -count=1 -cover`，2026-09-14 实测）：
 ## 7. LocalServer 探测
 
 - `nats://127.0.0.1:4333`：**存活**（TCP 4333 连通；`GET :8333/jsz` 返回正常 JSON：`accounts: 1`、`api.level: 5`、server_id `NBW775X…`）。buckets/jsadmin/messaging 的 LocalServer 变体随全量 `go test ./... -count=1` 实跑，0 SKIP、0 失败（buckets 22.7s 含洪峰/100MB/并发等重量级场景）。
-- 冒烟对 4333 的使用：仅作为 local-test 上下文的启动恢复目标（连带取得 §8.3.1 降级横幅的实证）；未产生 m5 残留资产。
+- 冒烟对 4333 的使用：仅作为 local-test 上下文的启动恢复目标（连带取得 §8.3.1 降级横幅的实证；该实证的投递机制经终审 I-1 更正——修复前系绑定路径零值读出而非事件线投递，见冒烟行 f 注记；修复后 live 腿待重跑）；未产生 m5 残留资产。
 
 ## 8. 缺陷记录（Task 14 新发现）
 

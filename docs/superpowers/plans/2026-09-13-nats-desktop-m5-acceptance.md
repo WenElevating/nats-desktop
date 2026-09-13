@@ -38,7 +38,7 @@
 |---|---|---|
 | 1. 服务器表显示 3 个节点（名称、版本、CPU、内存、连接数、JS 角色） | **AUTOMATED-PASS + LIVE-PASS** | 自动化：`TestSnapshotClusterNodeOfflineMarking` 等快照用例（wire 7 列契约、jsRole 映射纯函数真值表，Task 4）+ `monitoring-server-table` 8 例（虚拟化/排序/角色徽标，Task 10）。实测（testcluster 3 节点 + sys 账户）：表行 `在线 S1 2.15.0-preview.1 6m8s 0.7% 23.0 MiB 3 8/0 投票成员`、`在线 S2 … 元数据主`、`在线 S3 … 投票成员` |
 | 2. 第二周期数据刷新；断开一节点后该节点标红离线、其余正常 | **AUTOMATED-PASS（两半）+ LIVE-PASS（刷新半边）** | 刷新：实测两读值 `6m33s 0.3% 23.6 MiB`（05:09:59）→ `6m43s 0.0% 24.4 MiB`（05:10:11），日志 `cycle_ms=610–626` 连续无缺拍；`data-polled-at` 双锚点（MonitoringPage/ServerTable 根）由前端用例钉住跨周期变化。节点断连标红：`TestSnapshotClusterNodeOfflineMarking`（known 集 diff、`online=false` 标红、保留上轮数据、`OfflineSinceMs` 单次设置、恢复在线——Task 4）；UIA 未现场杀节点（集群破坏性操作），按自动化腿采信 |
-| 附加：Dashboard 总览（§6.5） | **LIVE-PASS** | 「服务器 3/3」「连接数 3」「JS 内存 0% 0 0 B / 35.4 GiB」「JS 存储 0% 0 0 B / 3.0 TiB」「往返延迟 1 ms」卡片 + 近期事件面板全部呈现；无系统账户的 4333 上下文下呈现降级横幅（见 §6 附加行） |
+| 附加：Dashboard 总览（§6.5） | **LIVE-PASS** | 「服务器 3/3」「连接数 3」「JS 内存 0% 0 0 B / 35.4 GiB」「JS 存储 0% 0 0 B / 3.0 TiB」「往返延迟 1 ms」卡片 + 近期事件面板全部呈现；无系统账户的 4333 上下文下呈现降级横幅（见 §6 附加行）。**【终审 I-1 注记】**该降级横幅的投递机制已更正：修复前事件线不可能投递降级帧，横幅系绑定路径零值快照读出（通用兜底文案、不随周期刷新），非 §8.3.1 事件线投递；修复波（Go 恒发 `"servers":[]` + 前端 schema nullable）后事件线按周期投递——**live 腿修复后待重跑**，覆盖证据为 `monitoring-use-monitor.test.ts` 的 `servers:null`/`[]` 事件线用例 |
 
 ### AC-016 系统事件流（条件：集群系统账户；操作：打开事件流，制造一次客户端断连）
 
@@ -60,7 +60,7 @@
 |---|---|---|
 | 1 | 监控轮询契约（interval 设置 + 可见性门 + 单飞 ticker + monitor:snapshot 事件 + GetMonitoringSnapshot） | Task 4：`TestStartStopMonitoringEvents` / `TestNotifyConnStateStopsTicker`（null-hypothesis：interval=2s + 2.5s 观察窗）；Task 10：`monitoring-use-monitor` 门控生命周期用例。实测：5s 间隔 chip + 连续周期无缺拍 |
 | 2 | 节点级失败隔离（2s 固定超时、标红保留上轮、恢复在线） | Task 4：`TestSnapshotClusterNodeOfflineMarking` + 快照降级用例；AC-015 预期 2 自动腿 |
-| 3 | $SYS 权限降级（sys_available=false + 原文 reason；面板级失败不传染） | Task 4：`TestSnapshotNoSysPermission`（503 原文路径）；**本轮 UIA 附带实证**：4333（无系统账户）下「系统账户不可用——集群级指标受限」横幅呈现、sys 集群下消失 |
+| 3 | $SYS 权限降级（sys_available=false + 原文 reason；面板级失败不传染） | Task 4：`TestSnapshotNoSysPermission`（503 原文路径）；**本轮 UIA 附带实证**：4333（无系统账户）下「系统账户不可用——集群级指标受限」横幅呈现、sys 集群下消失。**【终审 I-1 注记】**机制更正：该实证修复前经由绑定路径零值快照读出（通用兜底文案、不刷新），非 §8.3.1 事件线逐周期投递；修复波已修（Go 降级恒发 `"servers":[]` + 前端 schema nullable + 事件线 null/[] 两形用例），**live 腿修复后待重跑** |
 | 4 | kick 断开连接（L1 + 服务器原文透传） | Task 5：`TestKickConnection`（拒绝原文透传、gone-cid 软处理见 §5-6）；本轮 UIA 实测 L1 全流程 |
 | 5 | 事件洪水（4096 丢最旧 + dropped_total/filtered_total、10k 前端环、长生命周期 ctx、断连全停） | Task 7：ingest/queue 纯测 120 连跑 0 失败 + flood 200 连接零丢失；Task 12：EventsPanel ring/清空用例；`TestNotifyConnStateStopsSysWatches` |
 | 6 | 危险操作契约（全 L2、名称不匹配拒绝、单飞 conflict、闭集错误码） | Task 8：CAS 单飞 + conflict；Task 12：DangerOpDialog 六 props 语义保持；AC-017 LIVE |

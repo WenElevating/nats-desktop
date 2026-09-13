@@ -131,9 +131,13 @@ const settingsFixture = () => ({
 
 const ok = { error_code: "", error: "" };
 
+// Drain useMonitor's queued start/stop ops (promise-chain serializer) plus
+// the awaited reads inside each op — several microtask hops each.
 const flush = () =>
   act(async () => {
-    await Promise.resolve();
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
   });
 
 const table = (servers: Record<string, unknown>[], polledAt = 4_200) =>
@@ -251,7 +255,9 @@ it("renders toolbar, degradation banner, and the table anchor", async () => {
     snapshot({
       sys_available: false,
       sys_reason: "system account required",
-      servers: [row()],
+      // Degraded frames carry no rows — Go emits the non-nil empty slice
+      // ("servers":[]) on every sys_available=false path (final review I-1).
+      servers: [],
     }) as never,
   );
   render(<MonitoringPage />);
@@ -270,7 +276,8 @@ it("renders toolbar, degradation banner, and the table anchor", async () => {
   expect(banner.textContent).toContain("System account");
   expect(banner.textContent).toContain("system account required");
 
-  expect(screen.getByTestId("monitor-row-nats1")).toBeTruthy();
+  // A degraded snapshot has no server rows → the empty-state guidance.
+  expect(screen.getByTestId("monitor-table-empty")).toBeTruthy();
 
   // Task 11/12 tab placeholders below the table.
   for (const id of ["connections", "events", "accounts", "danger"]) {

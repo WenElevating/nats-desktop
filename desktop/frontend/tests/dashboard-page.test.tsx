@@ -141,10 +141,13 @@ const settingsFixture = () => ({
 
 const ok = { error_code: "", error: "", watch_id: "w1" };
 
+// Drain useMonitor's queued start/stop ops (promise-chain serializer, final
+// review I-2) plus the awaited reads inside each op — several microtask hops.
 const flush = () =>
   act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
   });
 
 beforeEach(() => {
@@ -277,5 +280,6 @@ it("mount starts the monitor loop; unmount stops it", async () => {
   await flush();
   expect(StartMonitoring).toHaveBeenCalledTimes(1);
   unmount();
+  await flush(); // the stop is queued now (I-2 serializer) — drain before asserting
   expect(StopMonitoring).toHaveBeenCalled();
 });

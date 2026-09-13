@@ -6,8 +6,9 @@ import type { MonitorSnapshot } from "../../lib/bindings";
  * "monitor:snapshot" event payload. Events cross the Wails bridge as plain
  * JSON and are outside the generated bindings surface (kv:watch 同款), so the
  * parse here is the whitelist: unknown fields are stripped, known fields fall
- * back to the Go zero values on a type mismatch, a payload without the
- * required `servers`/row `name` fields drops (null). CallResult is
+ * back to the Go zero values on a type mismatch, a payload without the row
+ * `name` fields drops (null) — while a `servers:null` array parses as an
+ * empty table (final review I-1). CallResult is
  * deliberately absent — snapshots carry no error envelope.
  */
 const num = z.number().catch(0);
@@ -48,7 +49,13 @@ export const monitorServerRowSchema = z.object({
 });
 
 export const monitorSnapshotSchema = z.object({
-  servers: z.array(monitorServerRowSchema),
+  // nullable + null→[]：Go 侧零值/降级帧可能携带 "servers":null（nil slice
+  // 的 JSON 形状；终审 I-1）——整个帧必须按空表落地而不是被门禁丢弃。
+  // 数组内的坏行仍按 monitorServerRowSchema 裁决（缺 name 的帧照旧 drop）。
+  servers: z
+    .array(monitorServerRowSchema)
+    .nullable()
+    .transform((v) => v ?? []),
   sys_available: bool,
   sys_reason: str,
   polled_at_ms: num,
