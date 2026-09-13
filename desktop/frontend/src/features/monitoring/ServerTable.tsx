@@ -42,8 +42,9 @@ interface SortState {
   desc: boolean;
 }
 
-/** Uptime cell: seconds reduced to a compact d/h/m/s form, 0 → "—". */
-function formatUptime(seconds: number): string {
+/** Uptime cell: seconds reduced to a compact d/h/m/s form, 0 → "—". Shared
+ * with the NodeDetail report card. */
+export function formatUptime(seconds: number): string {
   if (seconds <= 0) return "—";
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
