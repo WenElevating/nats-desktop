@@ -86,6 +86,11 @@ func StartSysServer(t *testing.T) SysServer {
 	if err1 != nil || err2 != nil {
 		t.Fatalf("lookup accounts: %v / %v", err1, err2)
 	}
+	// opts.JetStream 只开启服务器层；app 用户创建 JS 资产（stream/KV）要求
+	// APP 账户自身启用 JS，否则报 10039（JS not enabled for account）。
+	if err := appAcc.EnableJetStream(nil, nil); err != nil {
+		t.Fatalf("enable JetStream on APP account: %v", err)
+	}
 	return SysServer{
 		URL:     srv.ClientURL(),
 		SysUser: sysUser, SysPass: sysPass,
@@ -163,6 +168,15 @@ func StartCluster(t *testing.T, n int) Cluster {
 	}
 
 	waitClusterReady(t, nodes[0].URL, n)
+	// app 用户创建 JS 资产要求 APP 账户自身启用 JS（opts.JetStream 只是服务器
+	// 层开关，否则报 10039）；在任一节点启用即随系统账户传播全集群，取 seed。
+	appAcc, err := nodes[0].Srv.LookupAccount("APP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appAcc.EnableJetStream(nil, nil); err != nil {
+		t.Fatalf("enable JetStream on APP account: %v", err)
+	}
 	return Cluster{Nodes: nodes, SysUser: sysUser, SysPass: sysPass, AppUser: appUser, AppPass: appPass}
 }
 
