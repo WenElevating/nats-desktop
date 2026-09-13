@@ -53,11 +53,11 @@ const StreamsPage = lazy(() => import("./features/streams/StreamsPage"));
 const ConsumersPage = lazy(() => import("./features/consumers/ConsumersPage"));
 const KeyValuePage = lazy(() => import("./features/kv/KeyValuePage"));
 const ObjectsPage = lazy(() => import("./features/objects/ObjectsPage"));
+const MonitoringPage = lazy(() => import("./features/monitoring/MonitoringPage"));
 
 /**
- * Placeholder for the pages landing in M5 (Dashboard, Monitoring). Only
- * rendered while connected; the Shell swaps in its own guidance state
- * otherwise.
+ * Placeholder for the pages landing later in M5 (Dashboard). Only rendered
+ * while connected; the Shell swaps in its own guidance state otherwise.
  */
 function PagePlaceholder({ page }: { page: PageId }) {
   const { t } = useTranslation();
@@ -287,6 +287,10 @@ function AppBody() {
         ) : page === "objects" ? (
           <Suspense fallback={<PageSkeleton />}>
             <ObjectsPage />
+          </Suspense>
+        ) : page === "monitoring" ? (
+          <Suspense fallback={<PageSkeleton />}>
+            <MonitoringPage />
           </Suspense>
         ) : (
           <PagePlaceholder page={page} />
