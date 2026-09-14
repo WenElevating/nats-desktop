@@ -3,7 +3,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -20,9 +20,7 @@ import * as $models from "./models.js";
  * goroutine emit("sys:event")。部分订阅失败时回滚已建订阅（fail closed）。
  */
 export function CreateSysWatch(spec: $models.SysWatchSpec): $CancellablePromise<$models.CreateSysWatchResult> {
-    return $Call.ByID(2330680478, spec).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(2330680478, spec);
 }
 
 /**
@@ -30,9 +28,7 @@ export function CreateSysWatch(spec: $models.SysWatchSpec): $CancellablePromise<
  * （SysAvailable=false）。
  */
 export function GetMonitoringSnapshot(): $CancellablePromise<$models.MonitorSnapshot> {
-    return $Call.ByID(1913593440).then(($result: any) => {
-        return $$createType1($result);
-    });
+    return $Call.ByID(1913593440);
 }
 
 /**
@@ -41,9 +37,7 @@ export function GetMonitoringSnapshot(): $CancellablePromise<$models.MonitorSnap
  * healthz 失败容忍 → HealthStatus="" + HealthError 原文。
  */
 export function GetServerDetail(name: string): $CancellablePromise<$models.ServerDetailResult> {
-    return $Call.ByID(4201275236, name).then(($result: any) => {
-        return $$createType2($result);
-    });
+    return $Call.ByID(4201275236, name);
 }
 
 /**
@@ -51,9 +45,7 @@ export function GetServerDetail(name: string): $CancellablePromise<$models.Serve
  * 透传（Global 4）。日志只记服务器名与 cid，不记用户身份（§13.3）。
  */
 export function KickConnection(name: string, cid: number): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(3888311400, name, cid).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(3888311400, name, cid);
 }
 
 /**
@@ -63,9 +55,7 @@ export function KickConnection(name: string, cid: number): $CancellablePromise<$
  * not_connected 路径。只记账户/stream 聚合计数（§13.3）。
  */
 export function ListAccounts(): $CancellablePromise<$models.AccountListResult> {
-    return $Call.ByID(3201350538).then(($result: any) => {
-        return $$createType4($result);
-    });
+    return $Call.ByID(3201350538);
 }
 
 /**
@@ -75,9 +65,7 @@ export function ListAccounts(): $CancellablePromise<$models.AccountListResult> {
  * Global 9 的 wire 半边）。
  */
 export function ListServerConnections(name: string, sort: string, offset: number, limit: number): $CancellablePromise<$models.ConnPageResult> {
-    return $Call.ByID(1750766526, name, sort, offset, limit).then(($result: any) => {
-        return $$createType5($result);
-    });
+    return $Call.ByID(1750766526, name, sort, offset, limit);
 }
 
 /**
@@ -86,9 +74,7 @@ export function ListServerConnections(name: string, sort: string, offset: number
  * （服务端 id 寻址最精确），否则按名。找不到 → not_found。
  */
 export function MetaPeerRemove(peer: string): $CancellablePromise<$models.ClusterOpResult> {
-    return $Call.ByID(441981975, peer).then(($result: any) => {
-        return $$createType6($result);
-    });
+    return $Call.ByID(441981975, peer);
 }
 
 /**
@@ -96,9 +82,7 @@ export function MetaPeerRemove(peer: string): $CancellablePromise<$models.Cluste
  * 无域 manager（natscli parity）→ MetaLeaderStandDown(nil) → 轮询新 leader。
  */
 export function MetaStepDown(): $CancellablePromise<$models.ClusterOpResult> {
-    return $Call.ByID(364005833).then(($result: any) => {
-        return $$createType6($result);
-    });
+    return $Call.ByID(364005833);
 }
 
 /**
@@ -110,9 +94,7 @@ export function NotifyConnState(ev: connections$0.StateEvent): $CancellablePromi
 }
 
 export function StartMonitoring(): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(3169526816).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(3169526816);
 }
 
 /**
@@ -120,9 +102,7 @@ export function StartMonitoring(): $CancellablePromise<$models.CallResult> {
  * Start 竞争 emit 顺序。
  */
 export function StopMonitoring(): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(3551371480).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(3551371480);
 }
 
 /**
@@ -130,9 +110,7 @@ export function StopMonitoring(): $CancellablePromise<$models.CallResult> {
  * 注册表删除。未知 id → not_found。
  */
 export function StopSysWatch(watchId: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(684757450, watchId).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(684757450, watchId);
 }
 
 /**
@@ -141,9 +119,7 @@ export function StopSysWatch(watchId: string): $CancellablePromise<$models.CallR
  * Warnf/Errorf），不手写适配器；balancer 内部细节不外泄，结果只记数量。
  */
 export function StreamBalance(stream: string): $CancellablePromise<$models.ClusterOpResult> {
-    return $Call.ByID(3591297434, stream).then(($result: any) => {
-        return $$createType6($result);
-    });
+    return $Call.ByID(3591297434, stream);
 }
 
 /**
@@ -151,9 +127,7 @@ export function StreamBalance(stream: string): $CancellablePromise<$models.Clust
  * 单飞 target 取流名：同一流的副本移除串行（RAFT 组收敛期间叠加移除有风险）。
  */
 export function StreamPeerRemove(stream: string, peer: string): $CancellablePromise<$models.ClusterOpResult> {
-    return $Call.ByID(310836130, stream, peer).then(($result: any) => {
-        return $$createType6($result);
-    });
+    return $Call.ByID(310836130, stream, peer);
 }
 
 /**
@@ -161,16 +135,5 @@ export function StreamPeerRemove(stream: string, peer: string): $CancellableProm
  * → LeaderStepDown() → 轮询新 leader。
  */
 export function StreamStepDown(stream: string): $CancellablePromise<$models.ClusterOpResult> {
-    return $Call.ByID(436450800, stream).then(($result: any) => {
-        return $$createType6($result);
-    });
+    return $Call.ByID(436450800, stream);
 }
-
-// Private type creation functions
-const $$createType0 = $models.CreateSysWatchResult.createFrom;
-const $$createType1 = $models.MonitorSnapshot.createFrom;
-const $$createType2 = $models.ServerDetailResult.createFrom;
-const $$createType3 = $models.CallResult.createFrom;
-const $$createType4 = $models.AccountListResult.createFrom;
-const $$createType5 = $models.ConnPageResult.createFrom;
-const $$createType6 = $models.ClusterOpResult.createFrom;

@@ -6,7 +6,7 @@ export {
     BucketService
 };
 
-export {
+export type {
     BucketDetailResult,
     CallResult,
     CreateWatchResult,

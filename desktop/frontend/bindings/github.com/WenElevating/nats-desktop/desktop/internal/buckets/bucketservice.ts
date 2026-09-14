@@ -11,7 +11,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -29,9 +29,7 @@ import * as $models from "./models.js";
  * negative duration skips the age filter and purges every marker.
  */
 export function CompactKvBucket(name: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(3066257731, name).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(3066257731, name);
 }
 
 /**
@@ -41,9 +39,7 @@ export function CompactKvBucket(name: string): $CancellablePromise<$models.CallR
  * config, which is what the UI's duplicate banner is for.
  */
 export function CreateKvBucket(form: $models.KvBucketForm): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(2741664732, form).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(2741664732, form);
 }
 
 /**
@@ -53,9 +49,7 @@ export function CreateKvBucket(form: $models.KvBucketForm): $CancellablePromise<
  * Background 派生的长生命周期 cancel ctx（绝不 s.timeout()）。
  */
 export function CreateKvWatch(bucket: string, keys: string): $CancellablePromise<$models.CreateWatchResult> {
-    return $Call.ByID(112755009, bucket, keys).then(($result: any) => {
-        return $$createType1($result);
-    });
+    return $Call.ByID(112755009, bucket, keys);
 }
 
 /**
@@ -65,9 +59,7 @@ export function CreateKvWatch(bucket: string, keys: string): $CancellablePromise
  * config, same as the KV half.
  */
 export function CreateObjBucket(form: $models.ObjBucketForm): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(2824647206, form).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(2824647206, form);
 }
 
 /**
@@ -75,9 +67,7 @@ export function CreateObjBucket(form: $models.ObjBucketForm): $CancellablePromis
  * name="" sentinel，随后增量。ObjectInfo → ObjWatchEvent（ModTime → 毫秒 epoch）。
  */
 export function CreateObjWatch(bucket: string): $CancellablePromise<$models.CreateWatchResult> {
-    return $Call.ByID(2286577955, bucket).then(($result: any) => {
-        return $$createType1($result);
-    });
+    return $Call.ByID(2286577955, bucket);
 }
 
 /**
@@ -85,27 +75,21 @@ export function CreateObjWatch(bucket: string): $CancellablePromise<$models.Crea
  * （打标记并移除此前的全部修订，§6.8 彻底清除；UI 层负责二级确认）。
  */
 export function DeleteKey(bucket: string, key: string, mode: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(2757858687, bucket, key, mode).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(2757858687, bucket, key, mode);
 }
 
 /**
  * DeleteKvBucket removes the bucket and its data (二级确认在 UI 层).
  */
 export function DeleteKvBucket(name: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(1232063863, name).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(1232063863, name);
 }
 
 /**
  * DeleteObjBucket removes the bucket and its data (二级确认在 UI 层).
  */
 export function DeleteObjBucket(name: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(4035944791, name).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(4035944791, name);
 }
 
 /**
@@ -114,15 +98,16 @@ export function DeleteObjBucket(name: string): $CancellablePromise<$models.CallR
  * already deleted, no error will be returned"——重删幂等，测试钉住）。
  */
 export function DeleteObject(bucket: string, name: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(1122466103, bucket, name).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(1122466103, bucket, name);
 }
 
 /**
- * DownloadObject 下载桶内对象到目录（§6.9）：磁盘预检（free>0 且 < info.Size
+ * DownloadObject 下载桶内对象到目录（§6.9）：对象名安全守卫（服务器可控名
+ * base64 落库任意合法，".." 段/绝对/盘符形式在创建任何文件前拒绝——ErrUnsafeName）
+ * → 磁盘预检（free>0 且 < info.Size
  * 才拒绝——0 = 未知平台/查询失败，绝不阻止）→ os.Get（info 返回时即就绪，取
- * bytes_total/digest）→ 覆盖写（已存在先删，Windows rename 语义）→ io.Copy
+ * bytes_total/digest）→ 覆盖写（嵌套名补建中间目录；已存在先删，Windows
+ * rename 语义）→ io.Copy
  * （countingWriter 节流 running + TeeReader 进 sha256）→ 摘要复核。摘要不匹配
  * （含 nats.go Read 在 EOF 的内建 ErrDigestMismatch——tee 是第二道双保险）→
  * phase=incomplete + error「digest mismatch」，文件保留供人工比对；匹配 →
@@ -131,9 +116,7 @@ export function DeleteObject(bucket: string, name: string): $CancellablePromise<
  * （取消 ctx → Read 返回错误 → incomplete）。
  */
 export function DownloadObject(bucket: string, name: string, dir: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(1616482772, bucket, name, dir).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(1616482772, bucket, name, dir);
 }
 
 /**
@@ -141,9 +124,7 @@ export function DownloadObject(bucket: string, name: string, dir: string): $Canc
  * 标记也在其中，§6.8「历史可查」）。键不存在 → not_found。
  */
 export function GetKeyHistory(bucket: string, key: string): $CancellablePromise<$models.GetKeyHistoryResult> {
-    return $Call.ByID(192687300, bucket, key).then(($result: any) => {
-        return $$createType2($result);
-    });
+    return $Call.ByID(192687300, bucket, key);
 }
 
 /**
@@ -153,10 +134,8 @@ export function GetKeyHistory(bucket: string, key: string): $CancellablePromise<
  * 归一为 ErrKeyNotFound）→ 该键 NotFound=true，不拖垮整批；其余错误取首错
  * 分类后整批失败。
  */
-export function GetKeyValues(bucket: string, keys: string[]): $CancellablePromise<$models.GetKeyValuesResult> {
-    return $Call.ByID(4169159946, bucket, keys).then(($result: any) => {
-        return $$createType3($result);
-    });
+export function GetKeyValues(bucket: string, keys: string[] | null): $CancellablePromise<$models.GetKeyValuesResult> {
+    return $Call.ByID(4169159946, bucket, keys);
 }
 
 /**
@@ -166,9 +145,7 @@ export function GetKeyValues(bucket: string, keys: string[]): $CancellablePromis
  * frontend does not display bucket creation time.
  */
 export function GetKvBucketDetail(name: string): $CancellablePromise<$models.BucketDetailResult> {
-    return $Call.ByID(2983820083, name).then(($result: any) => {
-        return $$createType4($result);
-    });
+    return $Call.ByID(2983820083, name);
 }
 
 /**
@@ -180,9 +157,7 @@ export function GetKvBucketDetail(name: string): $CancellablePromise<$models.Buc
  * 版本变更）时保持 0 并由前端表单按「不设置」处理。
  */
 export function GetObjBucketDetail(name: string): $CancellablePromise<$models.ObjBucketDetailResult> {
-    return $Call.ByID(1408689397, name).then(($result: any) => {
-        return $$createType5($result);
-    });
+    return $Call.ByID(1408689397, name);
 }
 
 /**
@@ -193,9 +168,7 @@ export function GetObjBucketDetail(name: string): $CancellablePromise<$models.Ob
  * 服务端有序消费者。
  */
 export function ListKeys(bucket: string): $CancellablePromise<$models.ListKeysResult> {
-    return $Call.ByID(1128341107, bucket).then(($result: any) => {
-        return $$createType6($result);
-    });
+    return $Call.ByID(1128341107, bucket);
 }
 
 /**
@@ -207,9 +180,7 @@ export function ListKeys(bucket: string): $CancellablePromise<$models.ListKeysRe
  * gate），置空——对齐 jsadmin.ListStreams。
  */
 export function ListKvBuckets(): $CancellablePromise<$models.ListBucketsResult> {
-    return $Call.ByID(1741966469).then(($result: any) => {
-        return $$createType7($result);
-    });
+    return $Call.ByID(1741966469);
 }
 
 /**
@@ -220,9 +191,7 @@ export function ListKvBuckets(): $CancellablePromise<$models.ListBucketsResult> 
  * not_connected 不属于指引面板语义——对齐 ListKvBuckets/jsadmin.ListStreams。
  */
 export function ListObjBuckets(): $CancellablePromise<$models.ListBucketsResult> {
-    return $Call.ByID(3874068599).then(($result: any) => {
-        return $$createType7($result);
-    });
+    return $Call.ByID(3874068599);
 }
 
 /**
@@ -232,9 +201,7 @@ export function ListObjBuckets(): $CancellablePromise<$models.ListBucketsResult>
  * 空数组（非 nil，前端 .length 语义）。
  */
 export function ListObjects(bucket: string): $CancellablePromise<$models.ListObjectsResult> {
-    return $Call.ByID(367096585, bucket).then(($result: any) => {
-        return $$createType8($result);
-    });
+    return $Call.ByID(367096585, bucket);
 }
 
 /**
@@ -250,11 +217,12 @@ export function NotifyConnState(ev: connections$0.StateEvent): $CancellablePromi
 /**
  * OpenInFileManager 在资源管理器中定位并选中 path（§6.9「打开所在目录入口」）：
  * explorer /select——零新依赖。explorer 进程异步启动，失败仅为本进程侧错误。
+ * path 可能由前端以下载目录 + 服务器可控对象名拼出：含 ".." 段的形式会在
+ * explorer /select 前被拒（transfer.go hasDotDotSegment 同款穿越检测，
+ * ErrUnsafeName 同款哨兵），保证定位目标不越过用户所选目录。
  */
 export function OpenInFileManager(path: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(1826089049, path).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(1826089049, path);
 }
 
 /**
@@ -270,10 +238,8 @@ export function PickDownloadDirectory(): $CancellablePromise<string> {
  * PickBackupDirectory 同款链). Returns the selected paths; cancel/err → empty
  * slice (no error surfaced to the UI, 同 PickBackupDirectory 语义).
  */
-export function PickUploadFiles(): $CancellablePromise<string[]> {
-    return $Call.ByID(1130000770).then(($result: any) => {
-        return $$createType9($result);
-    });
+export function PickUploadFiles(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(1130000770);
 }
 
 /**
@@ -284,22 +250,20 @@ export function PickUploadFiles(): $CancellablePromise<string[]> {
  * （'/' 合法，natscli 互操作）。
  */
 export function PutKey(bucket: string, key: string, payloadB64: string, mode: string, expectedRevision: number): $CancellablePromise<$models.PutKeyResult> {
-    return $Call.ByID(2473772511, bucket, key, payloadB64, mode, expectedRevision).then(($result: any) => {
-        return $$createType10($result);
-    });
+    return $Call.ByID(2473772511, bucket, key, payloadB64, mode, expectedRevision);
 }
 
 /**
  * RenameObject 改名。注意 nats.go 的 UpdateMeta 以传入 meta **整体覆盖**元数据
  * （Description/Headers/Metadata 直接取传入值，零值即清空）——先 GetInfo 回填
  * 旧值再改名，避免外部创建的带描述/元数据对象在改名时被静默清空（Task 5 审查
- * 裁定）。源对象不存在/已删除 → not_found（nats.go 把不存在的 GetInfo 归一为
- * ErrUpdateMetaDeleted，服务层还原 not_found）；新名已被占用 → conflict。
+ * 裁定）。源对象不存在/已删除 → not_found：GetInfo 先于 UpdateMeta，缺失对象
+ * 在 nats.go 内部由 ErrMsgNotFound 归一为 ErrObjectNotFound（ErrUpdateMetaDeleted
+ * 是 UpdateMeta 自己对 ErrObjectNotFound 的 remap，此路径不会出现），两个
+ * sentinel 均经 classifyObjError 还原 not_found；新名已被占用 → conflict。
  */
 export function RenameObject(bucket: string, name: string, newName: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(396883350, bucket, name, newName).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(396883350, bucket, name, newName);
 }
 
 /**
@@ -310,9 +274,7 @@ export function RenameObject(bucket: string, name: string, newName: string): $Ca
  * 回退 = 以目标值 kv.Put 产生新修订（流序列不回滚）。
  */
 export function RevertKey(bucket: string, key: string): $CancellablePromise<$models.PutKeyResult> {
-    return $Call.ByID(2097795796, bucket, key).then(($result: any) => {
-        return $$createType10($result);
-    });
+    return $Call.ByID(2097795796, bucket, key);
 }
 
 /**
@@ -320,9 +282,7 @@ export function RevertKey(bucket: string, key: string): $CancellablePromise<$mod
  * 上传/编辑，服务器错误仍原文透传，§6.9 异常 3)。Seal 幂等。
  */
 export function SealObjBucket(name: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(4043992797, name).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(4043992797, name);
 }
 
 /**
@@ -330,9 +290,7 @@ export function SealObjBucket(name: string): $CancellablePromise<$models.CallRes
  * 注册表删除。未知 id → not_found。
  */
 export function StopWatch(watchId: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(2078434282, watchId).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(2078434282, watchId);
 }
 
 /**
@@ -340,9 +298,7 @@ export function StopWatch(watchId: string): $CancellablePromise<$models.CallResu
  * grow on the server (shrink is rejected as a 400 → validation, 表单内联).
  */
 export function UpdateKvBucket(form: $models.KvBucketForm): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(3480026917, form).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(3480026917, form);
 }
 
 /**
@@ -351,9 +307,7 @@ export function UpdateKvBucket(form: $models.KvBucketForm): $CancellablePromise<
  * 透传；缺失桶 ErrBucketNotFound → not_found。
  */
 export function UpdateObjBucket(form: $models.ObjBucketForm): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(3963967693, form).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(3963967693, form);
 }
 
 /**
@@ -364,20 +318,5 @@ export function UpdateObjBucket(form: $models.ObjBucketForm): $CancellablePromis
  * 先发 incomplete 再返回分类错误，成功才以 complete 收尾（bytes_done == bytes_total）。
  */
 export function UploadObject(bucket: string, path: string, rename: string): $CancellablePromise<$models.CallResult> {
-    return $Call.ByID(4217665173, bucket, path, rename).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(4217665173, bucket, path, rename);
 }
-
-// Private type creation functions
-const $$createType0 = $models.CallResult.createFrom;
-const $$createType1 = $models.CreateWatchResult.createFrom;
-const $$createType2 = $models.GetKeyHistoryResult.createFrom;
-const $$createType3 = $models.GetKeyValuesResult.createFrom;
-const $$createType4 = $models.BucketDetailResult.createFrom;
-const $$createType5 = $models.ObjBucketDetailResult.createFrom;
-const $$createType6 = $models.ListKeysResult.createFrom;
-const $$createType7 = $models.ListBucketsResult.createFrom;
-const $$createType8 = $models.ListObjectsResult.createFrom;
-const $$createType9 = $Create.Array($Create.Any);
-const $$createType10 = $models.PutKeyResult.createFrom;

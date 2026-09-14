@@ -6,7 +6,7 @@ export {
     JetAdminService
 };
 
-export {
+export type {
     BrowserMsg,
     BrowserPageRequest,
     BrowserPageResult,

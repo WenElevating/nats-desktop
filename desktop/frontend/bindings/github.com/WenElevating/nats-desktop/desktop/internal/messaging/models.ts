@@ -97,7 +97,14 @@ export interface ReqResult {
  * SessionSpec is the creation request for one subscription session
  * (spec §6.4). BufferSize <= 0 means "use the configured default" and is
  * resolved before the messaging layer sees the value; JSPosition selects
- * JetStream replay positioning (nil / mode "new" = plain core subscription).
+ * JetStream replay positioning (nil = plain core subscription; every
+ * non-nil JSPosition — including mode "new" — takes the JetStream path,
+ * and an empty mode is rejected). HeaderFilters optionally restricts
+ * receipts to messages whose headers carry every listed key with an exactly
+ * equal value (AND semantics, case-sensitive keys; matching happens Go-side
+ * BEFORE any counting/ring/push so flood-rate streams are filtered near the
+ * source). nil / empty means "no filtering". The service layer bounds the
+ * form to <= 8 pairs with keys/values <= 256 bytes.
  * The JSON tags are a frozen frontend contract.
  */
 export interface SessionSpec {
@@ -114,6 +121,17 @@ export interface SessionSpec {
  * tags are a frozen frontend contract. State is a closed set:
  * running | paused | closed. Error carries the verbatim server error text for
  * sessions the server refused (spec §6.4) and is otherwise empty.
+ * 
+ * Conservation semantics (extended for header filtering in M3): a session's
+ * received messages decompose exactly as
+ * 
+ * 	received == Total + Filtered
+ * 
+ * where Filtered counts receipts dropped by the session's HeaderFilters
+ * before any further processing. The delivered side keeps the M2 invariants
+ * unchanged: Total == emitted and Total == Dropped + BufferUsed (both
+ * computed over the delivered messages only — filtered receipts never touch
+ * the ring, the pusher, or the rate meter).
  */
 export interface SessionState {
     "id": string;

@@ -136,9 +136,9 @@ export function AccountsPanel() {
                   {stat(t("monitor.accounts.reservedMemory"), formatBytes(a.reserved_memory_bytes))}
                   {stat(t("monitor.accounts.reservedStore"), formatBytes(a.reserved_store_bytes))}
                 </div>
-                {a.stream_names.length > 0 ? (
+                {(a.stream_names ?? []).length > 0 ? (
                   <div className="mt-1.5 flex flex-wrap gap-1">
-                    {a.stream_names.map((s) => (
+                    {(a.stream_names ?? []).map((s) => (
                       <span
                         key={s}
                         title={s}

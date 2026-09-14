@@ -77,7 +77,7 @@ export function DangerZone({ snapshot }: DangerZoneProps) {
   const connected = conn.state === "connected";
 
   const metaLeader =
-    snapshot?.servers.find((r) => r.online && r.js_role === "meta_leader")?.name ?? "";
+    (snapshot?.servers ?? []).find((r) => r.online && r.js_role === "meta_leader")?.name ?? "";
 
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [pending, setPending] = useState<OpKey | null>(null);

@@ -6,7 +6,7 @@ export {
     MonitorService
 };
 
-export {
+export type {
     AccountListResult,
     AccountRow,
     CallResult,
