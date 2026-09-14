@@ -367,16 +367,27 @@ func TestDisconnectDuringInFlightConnect(t *testing.T) {
 		t.Fatal("connect goroutine did not finish")
 	}
 
-	// The dial error arrived after Disconnect: failed must never have
-	// been emitted and disconnected must be the final state.
+	// The contract (spec §10): the late dial error must not OVERWRITE the
+	// terminal disconnected — i.e. no failed may appear AFTER disconnected,
+	// and disconnected is final. On hosts whose stack resets silent sockets
+	// quickly (observed on CI runners), the dial may legitimately fail
+	// BEFORE the user's Disconnect lands ([connecting failed disconnected]);
+	// that ordering is correct behavior, not an overwrite, so the assertion
+	// is order-aware rather than "failed never emitted".
 	events.mu.Lock()
 	states := make([]State, 0, len(events.events))
 	for _, ev := range events.events {
 		states = append(states, ev.State)
 	}
 	events.mu.Unlock()
-	for _, s := range states {
-		if s == StateFailed {
+	lastDisc := -1
+	for i, s := range states {
+		if s == StateDisconnected {
+			lastDisc = i
+		}
+	}
+	for i := lastDisc + 1; i < len(states); i++ {
+		if states[i] == StateFailed {
 			t.Fatalf("late dial error overwrote terminal disconnected with failed: %v", states)
 		}
 	}
