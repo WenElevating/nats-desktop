@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log"
 	"log/slog"
+	"os"
 
 	"github.com/WenElevating/nats-desktop/desktop/internal/appdir"
 	"github.com/WenElevating/nats-desktop/desktop/internal/buckets"
@@ -177,6 +178,13 @@ func main() {
 	if logger != nil {
 		opts.Logger = logger
 		opts.LogLevel = logging.ParseLevel(s.Behavior.LogLevel)
+	}
+
+	// Low-spec simulation lever (M6 Task 5, test-only): NATSDESKTOP_DISABLE_GPU=1
+	// appends the WebView2 --disable-gpu switch for AC-024 simulated low-spec runs.
+	// Never set in normal operation; see scripts/perf-lowspec.ps1.
+	if os.Getenv("NATSDESKTOP_DISABLE_GPU") == "1" {
+		opts.Windows.AdditionalBrowserArgs = append(opts.Windows.AdditionalBrowserArgs, "--disable-gpu")
 	}
 
 	app := application.New(opts)
