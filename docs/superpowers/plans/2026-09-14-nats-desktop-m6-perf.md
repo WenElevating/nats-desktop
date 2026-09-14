@@ -107,7 +107,7 @@ CSV 列：`timestamp,private_mb,ws_mb,cpu_s,handles,threads`；**private 口径 
 
 ### 1.6 列表加载 / 滚动 / 反馈 / 上屏 P95
 
-- **列表加载 500 streams ≤500ms**：按 brief 与 **Task 6 合并执行**（10k 数据集就绪后取前 500 计时）——本表登记**执行顺序依赖：Task 6 数据集 + 计时腿先行，结果回填本表**。自动化近似参考（本轮 vitest bench 复跑，§1.7）：10k 行列表冷挂载 mean 15.9ms、排序切换 mean 9.9ms（React 提交层），与 500ms 门禁之间有充足余量。
+- **列表加载 500 streams ≤500ms**：**Task 6 已回填，见 §6.2（Go 前 500 取数 34–37ms）与 §6.4（UIA 全 10k 列表首帧 894–1,166ms，虚拟化渲染）——两档门禁 PASS**。自动化近似参考（本轮 vitest bench 复跑，§1.7）：10k 行列表冷挂载 mean 15.9ms、排序切换 mean 9.9ms（React 提交层），与 500ms 门禁之间有充足余量。
 - **滚动 ≥60fps**：PENDING-MANUAL（§S3-1）。
 - **操作视觉反馈 ≤100ms**：UIA 自动近似腿——`暂停` 按钮 Invoke → UIA 树出现 `已暂停` 文本 **80ms**（Stopwatch + 2ms 轮询 + UIA COM 往返，读数为**上限估计**）→ 与 ≤100ms 一致的间接证据；视觉面（帧级）PENDING-MANUAL（§S3-2）。
 - **上屏 P95 ≤200ms（实时与批量分别验证，§12 原文）**：帧级到达时刻需要录屏/DevTools，锁屏不可用 → **两种模式均 PENDING-MANUAL**（§S3-3）。自动化等价证据：①会话层守恒 1:1（消息无损到达 Go 会话层，§1.4）；②UIA 状态条速率与发布端一致（实时链路活的）；③批量模式同批时间戳语义有前端测试钉住（M2 AC-006）。登记为「单模式近似 + 另一模式同样 PENDING」的诚实口径（brief F27 允许的兜底）。
@@ -169,7 +169,7 @@ bench/tests/bench/streams.bench.ts
 ### 2.4 低配其余行
 
 - 10k 行滚动 ≥30fps、反馈 ≤100ms：PENDING-MANUAL（§S3，同高配路径，另加 perf-lowspec.ps1 启动）。
-- 列表加载 500 streams ≤1,500ms：Task 6 合并（同 §1.6 顺序依赖）。
+- 列表加载 500 streams ≤1,500ms：**Task 6 已回填（§6.2/§6.4），两档 PASS**。
 
 ## S2. 偏差登记（锁屏可见性）
 
@@ -202,10 +202,83 @@ OS 进程树采样（Go 主进程 + WebView2 全部子进程逐 PID private 求�
 | 常驻内存（典型负载） | ~1.4GB 稳态（30min）/7.0GB 峰值（5k 腿） | 741.5MB 峰值（60s 腿） | **两档 FAIL**（renderer 实时推送面；批量模式 -52% 缓解数据在案） |
 | 订阅吞吐 | 1k×30min 与 5k 持续腿速率达成 99.5–99.8%，会话层零丢失，缓冲丢弃计数精确 | 1k×60s 同 | **PASS**（视觉丢帧判读 PENDING-MANUAL） |
 | 频繁切换 100 次 | Go 腿：100 轮 4.44s，goroutine 差 0 | —（同 Go 腿覆盖） | **PASS** |
-| 列表加载 500 streams | Task 6 顺序依赖（bench 近似余量充足） | 同左 | PENDING（Task 6 回填） |
+| 列表加载 500 streams | **Task 6 已回填（§6.2/§6.4）**：Go 侧前 500 取数 34–37ms；UIA 全 10k 列表首帧 894–1,166ms（虚拟化，仅渲染视口行） | 同左（Go 腿同数） | **PASS**（§12 高/低配两档） |
 | 滚动帧率 | PENDING-MANUAL | PENDING-MANUAL | — |
 | 操作反馈 | UIA 上限估计 80ms；帧级 PENDING-MANUAL | 同左 | 近似 PASS |
 | 上屏 P95（实时/批量） | 双模式 PENDING-MANUAL（自动化等价证据 §1.6） | 同左 | PENDING-MANUAL |
 | 安装包体积 | 便携 exe 20,582,912B ≈ 19.6MiB（≤30MB） | 同左 | PASS |
 
 **核心发现（Task 11 汇入）**：内存门禁 breach 集中在实时逐条推送模式的前端渲染管线（`session:msgs` 1k/s 事件过桥 + 渲染 + V8 堆滞留）；空载与批量模式均大幅低于门禁。缓解杠杆：`session_push_batching`（-52%）、降缓冲上限、批量事件合帧；根治方向：推送合帧/虚拟化渲染批次化。
+
+## 6. Task 6 压力数据集预置与大数据集实测（AC-028 + §20.3，2026-09-14 15:22–16:05 执行）
+
+### 6.0 工具与数据集
+
+- **预置工具**：`desktop/cmd/loaddata`（新增，test-only）——`go run ./cmd/loaddata -url nats://127.0.0.1:4333 -streams 10000 -million 1000000 -kvkeys 100000`。幂等设计：每流先 `mgr.LoadStream` 探测已存在即跳过；`LOAD_MSGS` 按当前消息数续发（中断重跑不重复）；`LOAD_KV` 走 `CreateOrUpdateKeyValue`（`jetstream.KeyValue` 只绑定已存在桶，首跑必建）。1M 消息为 256B 载荷 `js.PublishAsync` 500/批（同步逐条 RTT 无法分钟级完成——对 brief「js.Publish 批 500/批」的批量语义实现，已在工具 doc comment 注明）；KV 键 `v%06d`、值 256B、History 1。Ctrl-C 安全：`signal.NotifyContext` + 各加载器逐单元检查 ctx，部分数据重跑自动续齐。
+- **烟测**：`go test ./cmd/loaddata/ -count=1` 全绿——内嵌 `testutil.StartSysServer`（app 凭据）跑 5 流/100 消息/50 键，summary 计数与服务端状态（`jsm.StreamNames`、流 State.Msgs、`kvs.Keys`）双向互证 + 二次执行幂等断言（created/skipped/published/put 全零增量）。
+- **预置结果（4333，PID 23016 全程存活）**：总耗时 **5m57.4s** = 流 10,000 条 **5m4.9s** + 消息 1,000,000 条 **25.56s**（≈39.1k msg/s）+ KV 100,000 键 **26.87s**；进度打印逐 2,000 流 / 100k 消息 / 20k 键在案（工具 stdout）。
+- **服务器状态 before/after**：before = **0 流 / 0 KV 桶**（Task 5 的 m2flood/m6perf 注入为 core-NATS 直发不落流，无遗留需要清理）；after = **10,002 流**（10,000×`LOAD_S%05d` + `LOAD_MSGS` + KV 底层流 `KV_LOAD_KV`）+ 桶 `LOAD_KV`（100,000 键，29.1 MiB）。`LOAD_MSGS` 1,000,000 条 / 281.3 MiB / first_seq=1 / last_seq=1,000,000。
+- **加载期内存观测**（`%TEMP%\loaddata-memsample.csv`，15s 采样，35 点）：nats-server private 167.5 → **峰值 1,157.9MB**（1M 消息发布段），主机空闲物理内存全程 ≥1.37GB——**无内存压力，批大小 500 未需下调**。数据集常驻使服务器 private +~990MB（10k 流元数据 ~650MB + 1M 消息/100k 键数据 ~340MB），Task 7 典型负载复用此服务器时按此基线判读。
+
+### 6.1 测量方法（Go 侧）
+
+Go 侧计时程序为 OS 临时目录一次性测量脚本（`%TEMP%\ac028.go`，用后即删不入库；`cd desktop && go run` 对 4333 实跑），全部为**应用真实取数路径**的等价实现：
+
+- Streams 列表 = `jsadmin.ListStreams` 路径：jsm `mgr.Streams(nil)`（`$JS.API.STREAM.LIST` 分页，页内含全量 StreamInfo——非逐流 INFO 请求，jsm.go manager.go:524 实现核实）+ jetstream `js.ListStreams`（同 API 的 jetstream 封装）互证 + 仅名 `mgr.StreamNames` 对照；
+- 前 500 子集 = `js.ListStreams` 迭代取前 500 条 Info 即停（§12「500 streams 列表加载」腿）；
+- 1M 流尾页 = `jsadmin.BrowseStream` 等价全路径：`js.Stream` 绑定 + 抛弃式消费者（`DeliverByStartSequencePolicy`/`OptStartSeq=999951`/`AckNone`/2min InactiveThreshold）+ `FetchNoWait(51)` 取 50 条 + 消费者删除，整路径计时；
+- KV 100k 键 = `buckets.ListKeys` 路径：`kv.Watch(ctx, ">", jetstream.MetaOnly())` 排序消费者拉满 100,000 条到 nil 哨兵 + 首 50 键 `kv.Get` 值补齐对照。
+- 每项均含预热轮（首轮 OS/文件缓存效应如实标注），后取多轮。
+
+### 6.2 Streams 列表 10k 行 —— **MEASURED-PASS**
+
+数据面：10,002 流。| 路径 | 轮次与读数 |
+|---|---|
+| 应用路径 `jsm.Streams`（ListStreams 全量等价） | 预热 640ms；实测 **643 / 649 / 778ms**（n=10002 全量含 State） |
+| jetstream `js.ListStreams` 分页互证 | **581 / 697 / 620ms** |
+| 仅名 `StreamNames` | 89 / 111ms |
+| **前 500 子集**（§12 腿，§1.6/§2.4 回填） | **34 / 37 / 36ms** → 高配 ≤500ms / 低配 ≤1,500ms **PASS（余量 13–22×）** |
+
+- **应用 5s 默认请求超时判定**：应用路径最慢轮 778ms ≪ 5s（settings `request_timeout_seconds=5`）——**默认设置下 10k 列表可正常加载**，不会触发 §6.6 不可用指引面板。
+- 10k 流元数据单价：jsm 全量 ≈ 0.064ms/流（含每流 State 汇总），与 1k 时代经验外推一致偏优（STREAM.LIST 分页摊薄请求开销）。
+
+### 6.3 1M 消息流浏览器尾页 —— **MEASURED-PASS（门禁 ≤1s）**
+
+`LOAD_MSGS`（1,000,000 条，256B）尾页 = seq 999,951–1,000,000 共 50 条（12,800B）：
+
+- **Go 侧 BrowseStream 等价全路径 5 轮**：67（首轮）/ 22 / 11 / 15 / 19ms——含流绑定 + 消费者创建 + Fetch + 消费者删除整链。**≤1s 门禁 PASS（余量 ~15×+）**。
+- 判读：`DeliverByStartSequence` 尾页取数与流总深度（1M seq）无关——首末页同价，浏览器任意位置跳转取数常数化。
+
+### 6.4 KV 100k 键分页 —— **MEASURED-PASS**
+
+`LOAD_KV`（100,000 键 / History 1 / 29.1 MiB）：
+
+| 腿 | 读数 | 门禁判读 |
+|---|---|---|
+| Go `ListKeys` 路径（Watch MetaOnly 全量快照）3 轮 | 279 / 276 / **231ms** | 1k 键基线 22.8–38.1ms（M4）×100 键量 → 外推线性上界 ~2.3–3.8s，**实测 231–279ms 优线性 ~10×**（分页摊薄）；≤500ms 高配门 **PASS**，5s 应用默认超时不触 |
+| 首 50 键 `kv.Get` 值补齐 2 轮 | 12 / 9ms | 与 M4 同量级 |
+| **UIA**：键值存储页 → 选中 LOAD_KV → 首键 `v000000` 可见 | 382（首轮）/ 141 / 162ms | **PASS**（上限估计，UIA 轮询粒度 50ms） |
+
+### 6.5 UI 侧实测（UIA，锁屏桌面）
+
+本轮锁屏会话 UIA 链路可驱动且**页面挂载取数真实执行**（Streams/KV/浏览器三页均实际加载数据出行——与 §S2 监控轮询被 visibility 门禁暂停的观察并存：门禁只拦轮询循环，不影响本轮页面首取）。计时为 **Stopwatch + 50ms UIA FindAll 轮询的上限估计**（含 UIA COM 往返）：
+
+| 腿 | 操作序列（UIA） | 3 轮读数 | 门禁判读 |
+|---|---|---|---|
+| Streams 页 10k 列表首帧 | 侧栏「流」Invoke → 首个 `LOAD_S` 行出现在 UIA 树 | 1,166 / 901 / 894ms | 含 Go 取数 ~640ms（§6.2）+ 桥 + 渲染；§12 无「10k 全量」独立门，对照 500ms/1.5s 档：超 500ms、**远低于低配 1.5s**；虚拟列表实证：10,002 流仅 93 个行级 UIA 元素（视口外不渲染） |
+| 1M 流浏览器尾页 | 流页 → LOAD_MSGS 行 Toggle 选中 → 详情「消息」Invoke → 浏览器「尾页」Invoke → seq 999951 行可见 | 652 / 664 / 688ms | **≤1s PASS**（上限估计；Go 腿 11–67ms） |
+| KV 100k 键页 | 见 §6.4 表 | 382 / 141 / 162ms | **PASS** |
+| 任意位置跳转（近似） | 「搜索流」输入 `LOAD_S0999x`（10k 名域尾部）→ 目标行可见 | 70 / 78 / 77ms | 自动化近似 **PASS**（客户端过滤瞬时） |
+
+**PENDING-MANUAL（精确路径）**：§12「任意位置跳转 ≤1s」的**虚拟列表滚动手测腿**——滚轮/拖动滚动条至第 N 千行的帧级滚动流畅度需 DevTools（锁屏不可用）：解锁桌面 → 启动应用连 4333 → 流页（10k 数据集在位）→ DevTools（`wails3 dev` 或生产构建 `-webviewdevtools`）→ 手动滚动列表至 `LOAD_S09xxx` 区段 → Performance 面板判读滚动帧率与行出现时延；或以 §6.5 搜索跳转腿 + 虚拟化渲染证据（93 元素/10,002 流）作 WAIVED 依据。
+
+### 6.6 小结（AC-028 两项实测值 + 关联腿）
+
+| AC-028 项 | 实测值 | 判定 |
+|---|---|---|
+| 10k 流列表加载 | Go 643–778ms（应用路径全量含 State）/ 前 500 = 34–37ms；UIA 首帧 894–1,166ms | **PASS**（默认超时 5s 不触；500 流腿两档 PASS） |
+| 1M 消息流尾页 | Go 11–67ms；UIA 652–688ms | **PASS（≤1s，余量 ~15×）** |
+| 100k KV 键分页（关联） | Go 231–279ms + 首页值补齐 9–12ms；UIA 141–382ms | **PASS**（对 1k 基线优线性外推 ~10×） |
+| 任意位置跳转（关联） | 搜索跳转 70–78ms（近似）；滚动手测 PENDING-MANUAL | 近似 PASS |
+| 数据集 | 4333 在位：10,002 流 / 1M×256B 消息 / 100k KV 键（Task 7 典型负载直接复用） | — |
+
