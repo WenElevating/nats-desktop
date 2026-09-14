@@ -108,7 +108,9 @@ export function AdvisoryList({ degraded }: AdvisoryListProps) {
       cancelled = true;
       stop();
     };
-  }, [connected, degraded]);
+    // t included: error toasts re-localize on language switch, which re-syncs
+    // the watch via the panel's own Stop→Create pattern (rare, harmless).
+  }, [connected, degraded, t]);
 
   // The sys:event subscription lives for the component's lifetime.
   useEffect(() => {

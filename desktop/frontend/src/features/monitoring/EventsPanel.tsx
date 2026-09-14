@@ -203,7 +203,9 @@ export function EventsPanel() {
       cancelled = true;
       stop();
     };
-  }, [connected, typesKey, regex]);
+    // t included: error toasts re-localize on language switch, which re-syncs
+    // the watch via the panel's own Stop→Create pattern (rare, harmless).
+  }, [connected, typesKey, regex, t]);
 
   // The sys:event subscription lives for the panel's lifetime; payloads for
   // other/old watch ids are ignored by id so a stale delivery cannot land.

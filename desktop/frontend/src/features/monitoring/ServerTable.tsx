@@ -87,10 +87,8 @@ export function ServerTable({ snapshot, selected, onSelect }: ServerTableProps) 
   const [sort, setSort] = useState<SortState>({ key: "name", desc: false });
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const rows = snapshot?.servers ?? [];
-
   const sorted = useMemo(() => {
-    const arr = [...rows];
+    const arr = [...(snapshot?.servers ?? [])];
     const dir = sort.desc ? -1 : 1;
     arr.sort((a, b) => byKey(a, b, sort.key) * dir);
     return arr;

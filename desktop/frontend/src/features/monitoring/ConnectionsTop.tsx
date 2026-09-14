@@ -23,19 +23,17 @@ export const CONN_GRID_COLS =
   "grid-cols-[56px_120px_minmax(0,1fr)_88px_44px_56px_64px_64px_76px_76px_72px_64px_56px_40px]";
 
 /** nats-server SortOpt subset accepted by the Go binding (Global 11). */
-const SORT_KEYS = [
-  "cid",
-  "subs",
-  "pending",
-  "msgs_to",
-  "msgs_from",
-  "bytes_to",
-  "bytes_from",
-  "idle",
-  "uptime",
-  "rtt",
-] as const;
-type ConnSortKey = (typeof SORT_KEYS)[number];
+type ConnSortKey =
+  | "cid"
+  | "subs"
+  | "pending"
+  | "msgs_to"
+  | "msgs_from"
+  | "bytes_to"
+  | "bytes_from"
+  | "idle"
+  | "uptime"
+  | "rtt";
 
 const LIMITS = [20, 50, 100] as const;
 
