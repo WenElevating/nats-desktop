@@ -7,7 +7,7 @@ import {
   RemoveStreamMessage,
   type BrowserMsg,
 } from "../../lib/bindings";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { PayloadView } from "../../lib/payload";
 import { useConfirm } from "../../lib/confirm";
 import { Badge } from "@/components/ui/badge";
@@ -427,7 +427,12 @@ export function StreamMsgs({ stream, summary, onClose }: StreamMsgsProps) {
                     aria-pressed={selected?.seq === row.msg.seq}
                     onClick={() => setSelected(row.msg)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") setSelected(row.msg);
+                      // M6 Task 8 ⑲: role="button" rows answer Space as well
+                      // as Enter; preventDefault stops the list scroll.
+                      if (e.key === "Enter" || e.key === " ") {
+                        if (e.key === " ") e.preventDefault();
+                        setSelected(row.msg);
+                      }
                     }}
                     className={`grid h-7 cursor-pointer items-center border-b border-[var(--border-soft)] px-3 hover:bg-[var(--accent-soft)] ${
                       selected?.seq === row.msg.seq ? "bg-[var(--accent-soft)]" : ""

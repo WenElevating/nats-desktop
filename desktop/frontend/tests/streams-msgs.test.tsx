@@ -349,6 +349,17 @@ it("utf-8 rows render the page payload directly (no GetStreamMessage) with a hea
   expect(pre.textContent).toBe('{\n  "b": 1,\n  "a": 2\n}');
 });
 
+it("message rows open the detail on Space as well as Enter (⑲)", async () => {
+  vi.mocked(BrowseStream).mockResolvedValue(page([msg(9)]) as never);
+  await setup();
+
+  fireEvent.keyDown(screen.getByTestId("msg-row-9"), { key: " " });
+  await flush();
+
+  expect(GetStreamMessage).not.toHaveBeenCalled();
+  expect(screen.getByTestId("msgs-detail-meta").textContent).toContain("ORDERS.new.9");
+});
+
 it("binary rows render a hex preview and a download button (b64 → Blob URL)", async () => {
   vi.mocked(BrowseStream).mockResolvedValue(
     page([

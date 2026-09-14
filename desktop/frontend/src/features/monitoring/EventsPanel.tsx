@@ -38,6 +38,30 @@ export const EVENT_RING_CAPACITY = 10_000;
 /** Regex input debounce (brief: 400ms). */
 export const REGEX_DEBOUNCE_MS = 400;
 
+/** Watch-failure toast rate limit (M6 Task 8 ㉖): the same error key toasts at
+ * most once per window — every filter chip flip rebuilds the watch, so a
+ * persistently failing create would otherwise spam one toast per flip. */
+export const WATCH_TOAST_RATE_LIMIT_MS = 5000;
+
+/**
+ * Pure rate-limit decision for watch-failure toasts: `key` (the raw error
+ * 原文) may toast again only after `windowMs` since its last toast. Records
+ * `now` when returning true. Bounded: past 50 distinct keys the table resets
+ * (an error flood is itself pathological).
+ */
+export function shouldToastError(
+  last: Map<string, number>,
+  key: string,
+  now: number,
+  windowMs = WATCH_TOAST_RATE_LIMIT_MS,
+): boolean {
+  const at = last.get(key);
+  if (at !== undefined && now - at < windowMs) return false;
+  if (last.size > 50) last.clear();
+  last.set(key, now);
+  return true;
+}
+
 const ROW_HEIGHT = 26;
 const OVERSCAN = 8;
 
@@ -104,6 +128,19 @@ export function formatEventTime(ms: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
+/**
+ * Toast a failed watch create through the ㉖ rate limit (keyed on the raw
+ * error 原文 — stable across languages, unlike the localized template).
+ */
+function watchCreateFailed(
+  t: (key: string, opts: { error: string }) => string,
+  last: Map<string, number>,
+  rawError: string,
+): void {
+  if (!shouldToastError(last, rawError, Date.now())) return;
+  toast.error(t("monitor.events.watchError", { error: rawError }));
+}
+
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /**
@@ -131,6 +168,8 @@ export function EventsPanel() {
 
   const watchRef = useRef<string | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
+  // Last-toasted timestamps per raw error (the ㉖ rate limit below).
+  const watchToastAt = useRef(new Map<string, number>());
 
   const virtualizer = useVirtualizer({
     count: events.length,
@@ -190,13 +229,13 @@ export function EventsPanel() {
           return;
         }
         if (res?.error_code) {
-          toast.error(t("monitor.events.watchError", { error: res.error || res.error_code }));
+          watchCreateFailed(t, watchToastAt.current, res.error || res.error_code);
           return;
         }
         watchRef.current = res?.watch_id ?? null;
       } catch (err) {
         /* transport-level: the next filter/connection change re-syncs */
-        toast.error(t("monitor.events.watchError", { error: errText(err) }));
+        watchCreateFailed(t, watchToastAt.current, errText(err));
       }
     })();
     return () => {

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
+import { formatBytes } from "../../lib/format";
 import type { MonitorServerRow } from "../../lib/bindings";
 import { useMonitor } from "../monitoring/useMonitor";
 import { AdvisoryList } from "./AdvisoryList";
@@ -97,16 +98,6 @@ export function pickRtt(connMs: number, snapMs: number): number | null {
   return null;
 }
 
-/** Human size for the ratio cards' used/max sub-line — NodeDetail's GiB/TiB
- * ladder (the messages-page formatBytes caps at MiB, too low for JS limits). */
-function formatSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KiB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(n < 10 * 1024 ** 2 ? 1 : 0)} MiB`;
-  if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(1)} GiB`;
-  return `${(n / 1024 ** 4).toFixed(1)} TiB`;
-}
-
 export interface DashboardPageProps {
   /** Shell navigation seam (App holds the page state): cards jump to the
    * page that manages what they summarize. */
@@ -173,7 +164,9 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
     used: number,
     max: number,
   ) => {
-    const pct = ratio === null ? null : Math.round(ratio * 100);
+    // aria-valuenow must stay within [0, 100] (M6 Task 8 ㉜): used can exceed
+    // max on a real server (reserved > limit), which would emit 100+.
+    const pct = ratio === null ? null : Math.min(100, Math.max(0, Math.round(ratio * 100)));
     return (
       <Card
         testid={`dash-card-${id}`}
@@ -202,11 +195,11 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
             >
               <span
                 className="block h-full rounded-full bg-[var(--accent)]"
-                style={{ width: `${Math.min(100, ratio! * 100)}%` }}
+                style={{ width: `${pct}%` }}
               />
             </span>
             <span className="text-[11px] tabular-nums text-[var(--fg-muted)]">
-              {formatSize(used)} / {formatSize(max)}
+              {formatBytes(used)} / {formatBytes(max)}
             </span>
           </>
         )}

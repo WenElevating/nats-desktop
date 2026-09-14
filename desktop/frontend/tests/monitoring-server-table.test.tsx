@@ -248,6 +248,27 @@ it("reports row selection to onSelect", () => {
   expect(onSelect).toHaveBeenCalledWith("nats-c");
 });
 
+it("activates a focused row with Space as well as Enter (⑲)", () => {
+  const onSelect = vi.fn();
+  render(
+    <ServerTable
+      snapshot={snapshot() as never}
+      selected={null}
+      onSelect={onSelect}
+    />,
+  );
+
+  const row = screen.getByTestId("monitor-row-nats-a");
+  fireEvent.keyDown(row, { key: " " });
+  fireEvent.keyDown(row, { key: "Enter" });
+  expect(onSelect).toHaveBeenCalledTimes(2);
+  expect(onSelect).toHaveBeenNthCalledWith(1, "nats-a");
+  expect(onSelect).toHaveBeenNthCalledWith(2, "nats-a");
+  // Unrelated keys are inert.
+  fireEvent.keyDown(row, { key: "Escape" });
+  expect(onSelect).toHaveBeenCalledTimes(2);
+});
+
 // ---- MonitoringPage shell ----
 
 it("renders toolbar, degradation banner, and the table anchor", async () => {

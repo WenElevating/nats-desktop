@@ -9,7 +9,7 @@ import {
   RestoreBackup,
   type CallResult,
 } from "../../lib/bindings";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";

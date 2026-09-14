@@ -3,6 +3,7 @@ import { it, expect, vi, beforeEach } from "vitest";
 import { AccountsPanel } from "../src/features/monitoring/AccountsPanel";
 import { GetSettings, ListAccounts } from "../src/lib/bindings";
 import type { AccountRow } from "../src/lib/bindings";
+import { toast } from "sonner";
 
 // AccountsPanel suite: real i18n (en resources); mocked connstate (hoisted
 // mutable) and the Wails bindings — the monitoring test pattern.
@@ -21,6 +22,8 @@ vi.mock("../src/lib/bindings", () => ({
   GetSettings: vi.fn(),
   ListAccounts: vi.fn(),
 }));
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 // ---- fixtures (AccountRow/AccountListResult wire shape, Go internal/monitor/types.go) ----
 
@@ -102,6 +105,22 @@ it("manual refresh re-queries the cluster-wide report", async () => {
   fireEvent.click(screen.getByTestId("accounts-refresh"));
   await flush();
   expect(ListAccounts).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the loaded cards + toasts when the transport throws (no blank-out)", async () => {
+  render(<AccountsPanel />);
+  await flush();
+  expect(screen.getByTestId("account-card-APP")).toBeTruthy();
+
+  // Transport-level rejection on refresh: M6 Task 8 ㉒ — the existing cards
+  // stay and the failure surfaces as a toast (never a silent empty list).
+  vi.mocked(ListAccounts).mockRejectedValueOnce(new Error("pipe closed") as never);
+  fireEvent.click(screen.getByTestId("accounts-refresh"));
+  await flush();
+
+  expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("pipe closed"));
+  expect(screen.getByTestId("account-card-APP")).toBeTruthy();
+  expect(screen.getByTestId("account-card-SYS")).toBeTruthy();
 });
 
 it("shows the degraded reason card with the 原文 when the report fails", async () => {

@@ -10,7 +10,7 @@ import {
   type CallResult,
   type ObjBucketSummary,
 } from "../../lib/bindings";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { useObjects } from "./useObjects";
 import { ObjectList } from "./ObjectList";
 import { UploadPanel } from "./UploadPanel";

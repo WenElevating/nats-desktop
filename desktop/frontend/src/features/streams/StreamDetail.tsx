@@ -3,7 +3,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { formatRate } from "./rates";
 import { Sparkline } from "./Sparkline";
 import type {

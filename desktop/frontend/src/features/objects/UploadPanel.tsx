@@ -1,6 +1,6 @@
 import { CheckCircle2, Loader2, Plus, Trash2, AlertTriangle } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import type { ObjTransferEvent } from "./useObjects";
 import type { ObjUploadApi } from "./useObjects";
 import { basename } from "./schema";

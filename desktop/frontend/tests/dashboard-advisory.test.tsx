@@ -7,7 +7,7 @@ import {
   ADVISORY_RING_CAPACITY,
   pushAdvisory,
 } from "../src/features/dashboard/AdvisoryList";
-import type { SysWatchEvent } from "../src/features/monitoring/EventsPanel";
+import { pushEvent, type SysWatchEvent } from "../src/features/monitoring/EventsPanel";
 import { CreateSysWatch, StopSysWatch } from "../src/lib/bindings";
 
 // Advisory list suite: real i18n (en resources); mocked connstate (hoisted
@@ -104,6 +104,17 @@ it("pushAdvisory keeps newest first and caps the ring at 100", () => {
   expect(ring).toHaveLength(100);
   expect(ring[0].seq).toBe(105);
   expect(ring[99].seq).toBe(6); // the five oldest are dropped
+});
+
+it("pushAdvisory delegates to EventsPanel.pushEvent (㉛, cap parameterized)", () => {
+  // Custom-cap parity with the primitive it delegates to.
+  expect(pushAdvisory([3, 2, 1], 4, 3)).toEqual(pushEvent([3, 2, 1], 4, 3));
+  expect(pushAdvisory([3, 2, 1], 4, 3)).toEqual([4, 3, 2]);
+  // The default cap is the advisory 100, not pushEvent's 10k default.
+  let ring: { seq: number }[] = [];
+  for (let i = 0; i <= 150; i++) ring = pushAdvisory(ring, { seq: i });
+  expect(ring).toHaveLength(100);
+  expect(ring[0]).toEqual({ seq: 150 });
 });
 
 // ---- watch lifecycle ----

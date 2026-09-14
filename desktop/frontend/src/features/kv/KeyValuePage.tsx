@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
 import { useConfirm } from "../../lib/confirm";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import type { KvBucketSummary, KeyValueOut } from "../../lib/bindings";
 import { useKv } from "./useKv";
 import { KeyList } from "./KeyList";
@@ -273,7 +273,12 @@ export function KeyValuePage() {
                 aria-pressed={api.selected === b.name}
                 onClick={() => api.select(b.name)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") api.select(b.name);
+                  // M6 Task 8 ⑲: role="button" rows answer Space as well as
+                  // Enter; preventDefault stops the list scroll.
+                  if (e.key === "Enter" || e.key === " ") {
+                    if (e.key === " ") e.preventDefault();
+                    api.select(b.name);
+                  }
                 }}
                 className={`grid w-full cursor-pointer items-center px-3 py-1.5 text-xs hover:bg-[var(--accent-soft)] ${BUCKET_COLS} ${
                   api.selected === b.name ? "bg-[var(--accent-soft)]" : ""

@@ -77,11 +77,3 @@ export function headersToWire(
 export function utf8Length(s: string): number {
   return new TextEncoder().encode(s).length;
 }
-
-/** Human size for the warn/reject texts; units match the Go MaxPayload
- * wording (MiB, as in "payload exceeds MaxPayload (8 MiB)"). */
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < MIB) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KiB`;
-  return `${(n / MIB).toFixed(1)} MiB`;
-}

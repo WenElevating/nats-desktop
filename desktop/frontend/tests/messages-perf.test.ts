@@ -1,15 +1,18 @@
 import { renderHook, act } from "@testing-library/react";
 import { it, expect, vi, beforeEach } from "vitest";
-import { useSessions, DEFAULT_BUFFER, type MsgOut } from "../src/features/messages/useSessions";
+import { useSessions, type FlushScheduler, DEFAULT_BUFFER, type MsgOut } from "../src/features/messages/useSessions";
 import { ListSessions, type SessionState } from "../src/lib/bindings";
 
 // Frontend perf gate (Task 11, spec §6.4 / §12; jsdom-logic-only — no NATS
 // server, no drawing: frame-rate validation is Task 13's live measurement).
 // The full production path is exercised: useSessions' session:msgs handler
-// (applyMsgsBatch through the setState updater) + React commit, driven by
-// act-batched event firing in the brief's flood profile (500 msgs x 20
-// batches = 10,000 events). Gate: the whole ingest lands in < 2s wall with an
-// exact final buffer (10,000 kept, seq-continuous).
+// (Task 8 coalescing buffer + one applyPendingMsgs fold per flush) + React
+// commit, driven by act-batched event firing in the brief's flood profile
+// (500 msgs x 20 batches = 10,000 events). The injected scheduler mirrors the
+// production rAF cadence deterministically: every event lands in the pending
+// buffer, one manual flush drains it (jsdom has no real animation frames).
+// Gate: ingest + flush land in < 2s wall with an exact final buffer (10,000
+// kept, seq-continuous).
 //
 // Mocks mirror tests/messages-sessions.test.tsx: @wailsio/runtime Events
 // (handlers captured), the bindings surface, sonner. i18n is real.
@@ -40,6 +43,16 @@ vi.mock("../src/lib/bindings", () => ({
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
+// Deterministic flush seam: captures the runFlush callback so the test fires
+// the frame drain explicitly (the default rafFlushScheduler needs real frames).
+let frameFlush: () => void = () => {};
+const manualScheduler: FlushScheduler = (cb) => {
+  frameFlush = cb;
+  return () => {
+    frameFlush = () => {};
+  };
+};
+
 const state = (): SessionState => ({
   id: "perf-1",
   subject: "perf.flood.#",
@@ -68,24 +81,37 @@ const fire = (name: string, data: unknown) =>
 
 beforeEach(() => {
   handlers.clear();
+  frameFlush = () => {};
   vi.mocked(ListSessions).mockResolvedValue(null as never);
 });
 
 it("ingests 10,000 session:msgs (500x20 batches) in < 2s with an exact final buffer", async () => {
-  const { result } = renderHook(() => useSessions());
+  const { result } = renderHook(() => useSessions({ scheduler: manualScheduler }));
   fire("session:state", state());
 
-  // The brief's flood profile: 20 batches of 500 realtime messages.
+  // The brief's flood profile: 20 batches of 500 realtime messages, buffered
+  // at arrival (no per-event setState) exactly as the production handler does.
   const batches: MsgOut[][] = Array.from({ length: 20 }, (_, b) =>
     Array.from({ length: 500 }, (_, i) => msg(b * 500 + i + 1)),
   );
 
   const t0 = performance.now();
   for (const batch of batches) fire("session:msgs", batch);
-  const elapsedMs = performance.now() - t0;
+  const ingestMs = performance.now() - t0;
 
-  // Gate: 10k events through the reducer + React commits inside 2s wall.
-  expect(elapsedMs).toBeLessThan(2000);
+  // Coalescing invariants: the burst lands in the buffer, React state is
+  // untouched until the frame flush drains it.
+  expect(result.current.messages["perf-1"]).toBeUndefined();
+
+  let flushMs = 0;
+  act(() => {
+    const t1 = performance.now();
+    frameFlush();
+    flushMs = performance.now() - t1;
+  });
+
+  // Gate: 10k events (buffer + fold + React commit) inside 2s wall.
+  expect(ingestMs + flushMs).toBeLessThan(2000);
 
   // Conservation of the ingest: exactly the default buffer kept, oldest
   // dropped beyond it, seq-continuous, and the session chip present.
@@ -96,5 +122,7 @@ it("ingests 10,000 session:msgs (500x20 batches) in < 2s with an exact final buf
   expect(result.current.sessions).toHaveLength(1);
   expect(result.current.sessions[0]).toMatchObject({ id: "perf-1", state: "running" });
 
-  console.info(`frontend perf: 10,000 msgs ingested in ${elapsedMs.toFixed(0)}ms (gate < 2000ms)`);
+  console.info(
+    `frontend perf: 10,000 msgs ingested in ${ingestMs.toFixed(0)}ms + flush ${flushMs.toFixed(0)}ms (gate < 2000ms)`,
+  );
 });

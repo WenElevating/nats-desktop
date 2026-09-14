@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "../../app/i18n";
 import { bytesToHex, fromBase64, fromBase64Bytes } from "../../lib/base64";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import type { KvWatchApi, KvWatchEvent } from "./useKv";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

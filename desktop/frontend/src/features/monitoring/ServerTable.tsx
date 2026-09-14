@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, type AriaAttributes } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "../../app/i18n";
 import type { MonitorServerRow, MonitorSnapshot } from "../../lib/bindings";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { Badge } from "@/components/ui/badge";
 
 // Fixed-equal rows (28px, overscan 8) so a large fleet costs O(viewport),
@@ -218,7 +218,12 @@ export function ServerTable({ snapshot, selected, onSelect }: ServerTableProps) 
                   title={offline ? r.error : undefined}
                   onClick={() => onSelect(r.name)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") onSelect(r.name);
+                    // M6 Task 8 ⑲: role="button" rows answer Space as well as
+                    // Enter; preventDefault stops the viewport scroll.
+                    if (e.key === "Enter" || e.key === " ") {
+                      if (e.key === " ") e.preventDefault();
+                      onSelect(r.name);
+                    }
                   }}
                   className={`absolute left-0 grid ${GRID_COLS} w-full cursor-pointer items-center px-3 text-xs hover:bg-[var(--accent-soft)] ${
                     selected === r.name ? "bg-[var(--accent-soft)]" : ""

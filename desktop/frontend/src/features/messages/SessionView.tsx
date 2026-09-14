@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "../../app/i18n";
 import { PushMode, type SessionState } from "../../lib/bindings";
 import { bytesToHex, fromBase64, fromBase64Bytes } from "../../lib/base64";
-import { formatBytes } from "./schema";
+import { formatBytes } from "../../lib/format";
 import { PayloadView } from "../../lib/payload";
 import type { MsgOut } from "./useSessions";
 import { Badge } from "@/components/ui/badge";
@@ -258,7 +258,12 @@ export function SessionView({ session, msgs, onPause, onResume, onClear, onClose
                   tabIndex={0}
                   onClick={() => setSelected(m)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") setSelected(m);
+                    // M6 Task 8 ⑲: role="button" rows answer Space as well as
+                    // Enter; preventDefault stops the list viewport scroll.
+                    if (e.key === "Enter" || e.key === " ") {
+                      if (e.key === " ") e.preventDefault();
+                      setSelected(m);
+                    }
                   }}
                   className="absolute left-0 flex w-full cursor-pointer items-center gap-3 px-3 hover:bg-[var(--accent-soft)]"
                   style={{ height: `${vi.size}px`, transform: `translateY(${vi.start}px)` }}

@@ -1228,3 +1228,22 @@ it("bucket rows select on Enter; compressed badge, ttl dash and the detail stat 
   expect(screen.getByTestId("kv-stat-max-value-size").textContent).toContain("unlimited");
   expect(screen.getByTestId("kv-stat-history").textContent).toContain("5");
 });
+
+it("bucket and key rows activate on Space as well as Enter (⑲)", async () => {
+  await setup();
+
+  // Bucket row: Space alone selects (falsifies the Enter-only handler).
+  fireEvent.keyDown(screen.getByTestId(`kv-bucket-row-${BUCKET}`), { key: " " });
+  await flush();
+  expect(screen.getByTestId("kv-bucket-detail")).toBeTruthy();
+
+  // Key row: Space alone selects and loads the values.
+  fireEvent.keyDown(screen.getByTestId("kv-key-row-k-000"), { key: " " });
+  await flush();
+  expect(screen.getByTestId("kv-key-detail")).toBeTruthy();
+
+  // Unrelated keys stay inert.
+  fireEvent.keyDown(screen.getByTestId("kv-key-row-k-000"), { key: "Escape" });
+  await flush();
+  expect(screen.getByTestId("kv-key-detail")).toBeTruthy(); // no error/blank
+});

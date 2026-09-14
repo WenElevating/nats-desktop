@@ -232,6 +232,28 @@ it("renders '-' for the JS ratio cards when the denominator is 0", async () => {
   expect(screen.queryByTestId("dash-js-store-bar")).toBeNull();
 });
 
+it("clamps the progressbar aria-valuenow at 100 when used exceeds max (㉜)", async () => {
+  // A real server can report reserved JS memory above its limit: ratio = 2.
+  // The old code emitted aria-valuenow=200 (invalid for role=progressbar).
+  vi.mocked(GetMonitoringSnapshot).mockResolvedValue(
+    snapshot({
+      servers: [
+        row({
+          js_memory_bytes: 2 * GiB,
+          js_max_memory_bytes: GiB,
+        }),
+      ],
+    }) as never,
+  );
+  render(<DashboardPage onNavigate={vi.fn()} />);
+  await flush();
+
+  const bar = screen.getByTestId("dash-js-memory-bar");
+  expect(bar.getAttribute("aria-valuenow")).toBe("100");
+  expect(bar.getAttribute("data-pct")).toBe("100");
+  expect(bar.firstElementChild?.getAttribute("style")).toBe("width: 100%;");
+});
+
 it("hides the bar until the first snapshot lands", async () => {
   vi.mocked(GetMonitoringSnapshot).mockResolvedValue(null as never);
   render(<DashboardPage onNavigate={vi.fn()} />);

@@ -243,6 +243,26 @@ it("hides a rejected report and shows the panel error card with the 原文", asy
   expect(screen.queryByTestId("node-detail")).toBeNull();
 });
 
+it("the error card's retry button reuses the refresh entry and recovers the report", async () => {
+  vi.mocked(GetServerDetail).mockResolvedValueOnce({
+    error_code: "server",
+    error: "request timed out",
+    detail: null,
+  } as never);
+  render(<NodeDetail server="nats1" />);
+  await flush();
+  expect(screen.getByTestId("node-error")).toBeTruthy();
+
+  // M6 Task 8 ㉓: the card offers a retry that drives the same load path.
+  fireEvent.click(screen.getByTestId("node-error-retry"));
+  await flush();
+  await flush();
+
+  expect(vi.mocked(GetServerDetail).mock.calls.length).toBe(2);
+  expect(screen.queryByTestId("node-error")).toBeNull();
+  expect(screen.getByTestId("node-detail")).toBeTruthy();
+});
+
 it("shows the empty hint without a selection and refetches when the selection changes", async () => {
   const view = render(<NodeDetail server={null} />);
   await flush();

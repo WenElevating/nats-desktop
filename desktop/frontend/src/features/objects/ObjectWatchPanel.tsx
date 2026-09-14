@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "../../app/i18n";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import type { ObjWatchApi } from "./useObjects";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

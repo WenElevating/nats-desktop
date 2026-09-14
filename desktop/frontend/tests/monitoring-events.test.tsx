@@ -1,6 +1,14 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { it, expect, vi, beforeEach } from "vitest";
-import { EventsPanel, EVENT_TYPES, EVENT_RING_CAPACITY, pushEvent, formatEventTime } from "../src/features/monitoring/EventsPanel";
+import {
+  EventsPanel,
+  EVENT_TYPES,
+  EVENT_RING_CAPACITY,
+  WATCH_TOAST_RATE_LIMIT_MS,
+  formatEventTime,
+  pushEvent,
+  shouldToastError,
+} from "../src/features/monitoring/EventsPanel";
 import type { SysEvent, SysWatchEvent } from "../src/features/monitoring/EventsPanel";
 import { CreateSysWatch, StopSysWatch } from "../src/lib/bindings";
 
@@ -310,4 +318,39 @@ it("the ring caps at 10,000 entries with the newest first", () => {
   expect(ring[9_999]).toBe(1); // oldest survivor
   // Below the cap it just prepends.
   expect(pushEvent([2, 1], 3)).toEqual([3, 2, 1]);
+});
+
+// ---- watch-failure toast rate limit (M6 Task 8 ㉖) ----
+
+it("shouldToastError rate-limits per error key and re-arms after the 5s window", () => {
+  const last = new Map<string, number>();
+  expect(shouldToastError(last, "e1", 1000)).toBe(true);
+  expect(shouldToastError(last, "e1", 1000 + WATCH_TOAST_RATE_LIMIT_MS - 1)).toBe(false);
+  expect(shouldToastError(last, "e1", 1000 + WATCH_TOAST_RATE_LIMIT_MS)).toBe(true);
+  // A different key is independent of the first one's window.
+  expect(shouldToastError(last, "e2", 1500)).toBe(true);
+  expect(last.get("e1")).toBe(1000 + WATCH_TOAST_RATE_LIMIT_MS);
+  expect(last.get("e2")).toBe(1500);
+});
+
+it("rate-limits identical watch-create failures to one toast per window (㉖)", async () => {
+  vi.mocked(CreateSysWatch).mockRejectedValue(new Error("bridge unavailable") as never);
+  const view = await setup();
+  expect(toast.error).toHaveBeenCalledTimes(1); // mount create fails → one toast
+
+  // Two filter-chip rebuilds with the SAME error inside the window: silenced.
+  fireEvent.click(screen.getByTestId("sys-event-type-js_metric"));
+  await flush();
+  fireEvent.click(screen.getByTestId("sys-event-type-auth_error"));
+  await flush();
+  expect(toast.error).toHaveBeenCalledTimes(1);
+  view.unmount();
+
+  // A different error key toasts immediately.
+  vi.mocked(CreateSysWatch).mockRejectedValue(new Error("different failure") as never);
+  const view2 = render(<EventsPanel />);
+  await flush();
+  expect(toast.error).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(toast.error).mock.calls[1][0]).toContain("different failure");
+  view2.unmount();
 });

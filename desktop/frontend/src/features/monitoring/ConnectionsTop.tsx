@@ -9,7 +9,7 @@ import {
   ListServerConnections,
   type ConnRow,
 } from "../../lib/bindings";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { Button } from "@/components/ui/button";
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -45,6 +45,16 @@ interface ConnQuery {
 
 const DEFAULT_QUERY: ConnQuery = { sortKey: "cid", offset: 0, limit: 20 };
 
+/**
+ * Server-side default direction per sort key (nats-server connz semantics):
+ * cid is sorted ascending, every other whitelisted key descending. The first
+ * fetch of a key returns that order and the UI labels it as-is (M6 Task 8
+ * ㉑ — the initial aria-sort was previously hardcoded ascending).
+ */
+export function serverDefaultDir(key: ConnSortKey): "ascending" | "descending" {
+  return key === "cid" ? "ascending" : "descending";
+}
+
 export interface ConnectionsTopProps {
   /** Selected server NAME (from useMonitor). */
   server: string | null;
@@ -66,7 +76,10 @@ export function ConnectionsTop({ server }: ConnectionsTopProps) {
   const { confirmL1 } = useConfirm();
 
   const [query, setQuery] = useState<ConnQuery>(DEFAULT_QUERY);
-  const [desc, setDesc] = useState(false);
+  // flipped = the user toggled away from the server-default direction for the
+  // active key (a local flip within the fetched page — Global 11 allows bare
+  // keys only on the wire).
+  const [flipped, setFlipped] = useState(false);
   const [rows, setRows] = useState<ConnRow[]>([]);
   const [total, setTotal] = useState(0);
   const [err, setErr] = useState("");
@@ -82,7 +95,7 @@ export function ConnectionsTop({ server }: ConnectionsTopProps) {
   if (prevServer !== server) {
     setPrevServer(server);
     setQuery(DEFAULT_QUERY);
-    setDesc(false);
+    setFlipped(false);
     setRows([]);
     setTotal(0);
     setErr("");
@@ -106,8 +119,9 @@ export function ConnectionsTop({ server }: ConnectionsTopProps) {
         }
       } catch (e) {
         if (seq.current !== my) return;
-        setRows([]);
-        setTotal(0);
+        // Transport throw (M6 Task 8 ㉒): keep the current page + toast, the
+        // same contract as the NodeDetail error card — a transport blip must
+        // not blank a panel the user is reading.
         toast.error(t("monitor.conn.loadFailed", { error: errText(e) }));
       } finally {
         if (seq.current === my) setLoading(false);
@@ -129,10 +143,10 @@ export function ConnectionsTop({ server }: ConnectionsTopProps) {
 
   const onSort = (key: ConnSortKey) => {
     if (key === query.sortKey) {
-      setDesc((d) => !d); // local flip within the fetched page
+      setFlipped((f) => !f); // local flip within the fetched page
       return;
     }
-    setDesc(false);
+    setFlipped(false); // the new key arrives in its server-default order
     setQuery((q) => ({ ...q, sortKey: key, offset: 0 }));
   };
 
@@ -165,15 +179,25 @@ export function ConnectionsTop({ server }: ConnectionsTopProps) {
     }
   };
 
-  const displayRows = useMemo(() => (desc ? [...rows].reverse() : rows), [rows, desc]);
+  /** Displayed rows: the fetched page is in the server-default order for the
+   * active key; flipping renders the reverse locally. */
+  const displayRows = useMemo(
+    () => (flipped && query.sortKey ? [...rows].reverse() : rows),
+    [rows, flipped, query.sortKey],
+  );
+
+  /** aria-sort (and arrow) for the active column: the server-default
+   * direction of the key, inverted when the user flipped. */
+  const sortDir = (key: ConnSortKey): AriaAttributes["aria-sort"] => {
+    if (query.sortKey !== key) return undefined;
+    const dir = serverDefaultDir(key);
+    if (!flipped) return dir;
+    return dir === "ascending" ? "descending" : "ascending";
+  };
 
   /** Sortable header cell: button + aria-sort for the active column. */
   const sortHead = (key: ConnSortKey, label: string, align?: "right") => ({
-    "aria-sort": (query.sortKey === key
-      ? desc
-        ? "descending"
-        : "ascending"
-      : undefined) as AriaAttributes["aria-sort"],
+    "aria-sort": sortDir(key),
     "data-testid": `conn-col-${key}`,
     className:
       align === "right"
@@ -187,7 +211,7 @@ export function ConnectionsTop({ server }: ConnectionsTopProps) {
         className="flex items-center gap-0.5 text-xs font-medium text-[var(--fg-muted)] hover:text-foreground"
       >
         {label}
-        {query.sortKey === key ? (desc ? " ↓" : " ↑") : ""}
+        {query.sortKey === key ? (sortDir(key) === "ascending" ? " ↑" : " ↓") : ""}
       </button>
     ),
   });

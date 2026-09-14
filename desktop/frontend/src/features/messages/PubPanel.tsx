@@ -11,10 +11,13 @@ import {
   type ReqForm,
 } from "../../lib/bindings";
 import { toBase64, fromBase64Bytes, bytesToHex } from "../../lib/base64";
+// Payload-size copy must match the Go MaxPayload MiB wording, so the shared
+// ladder (lib/format) is capped at MiB here (§6.3; other call sites use the
+// default TiB ceiling).
+import { formatBytes } from "../../lib/format";
 import {
   PAYLOAD_MAX_BYTES,
   PAYLOAD_WARN_BYTES,
-  formatBytes,
   headersToWire,
   pubSchema,
   utf8Length,
@@ -362,7 +365,7 @@ export function PubPanel() {
         />
         {sizeRejected !== null && (
           <p role="alert" data-testid="size-reject" className="text-xs text-[var(--danger-fg)]">
-            {t("messages.sizeReject", { size: formatBytes(sizeRejected) })}
+            {t("messages.sizeReject", { size: formatBytes(sizeRejected, { maxUnit: "MiB" }) })}
           </p>
         )}
         <Button variant="outline" size="sm" className="w-fit" onClick={formatJson}>
@@ -540,7 +543,7 @@ export function PubPanel() {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("messages.sizeWarnTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t("messages.sizeWarn", { size: sizeAsk !== null ? formatBytes(sizeAsk) : "" })}
+              {t("messages.sizeWarn", { size: sizeAsk !== null ? formatBytes(sizeAsk, { maxUnit: "MiB" }) : "" })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

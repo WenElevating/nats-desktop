@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { FolderOpen, Pencil, Trash2, Download } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import type { ObjectOut } from "../../lib/bindings";
 import type { ObjDownloadState } from "./useObjects";
 import { joinFilePath, renameNameSchema } from "./schema";

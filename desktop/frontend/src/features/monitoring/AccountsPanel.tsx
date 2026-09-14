@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
 import { ListAccounts, type AccountRow } from "../../lib/bindings";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { Button } from "@/components/ui/button";
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -49,7 +49,9 @@ export function AccountsPanel() {
       }
     } catch (e) {
       if (seq.current !== my) return;
-      setAccounts([]);
+      // Transport throw (M6 Task 8 ㉒): keep the current cards + toast — a
+      // transport blip must not blank a panel the user is reading (same
+      // contract as the ConnectionsTop/NodeDetail failure faces).
       toast.error(t("monitor.accounts.loadFailed", { error: errText(e) }));
     } finally {
       if (seq.current === my) setLoading(false);

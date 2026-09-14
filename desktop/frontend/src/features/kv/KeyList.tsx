@@ -1,5 +1,5 @@
 import { useTranslation } from "../../app/i18n";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import type { KeyMeta, KeyValueOut } from "../../lib/bindings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -124,7 +124,12 @@ export function KeyList({
                 aria-pressed={selectedKey === k.key}
                 onClick={() => onSelect(k)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") onSelect(k);
+                  // M6 Task 8 ⑲: role="button" rows answer Space as well as
+                  // Enter; preventDefault stops the list scroll.
+                  if (e.key === "Enter" || e.key === " ") {
+                    if (e.key === " ") e.preventDefault();
+                    onSelect(k);
+                  }
                 }}
                 className={`grid w-full cursor-pointer items-center px-3 py-1.5 text-xs hover:bg-[var(--accent-soft)] ${GRID_COLS} ${
                   selectedKey === k.key ? "bg-[var(--accent-soft)]" : ""

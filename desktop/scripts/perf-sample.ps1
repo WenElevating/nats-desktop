@@ -21,6 +21,9 @@ param([string]$ProcName = "nats-desktop", [string]$OutCsv, [int]$IntervalSec = 6
 # source of truth:
 #   timestamp,private_mb,ws_mb,cpu_s,handles,threads
 if (-not $OutCsv) { $OutCsv = Join-Path $env:TEMP ("perf-" + (Get-Date -Format yyyyMMdd-HHmmss) + ".csv") }
+# Culture-invariant numerics (Task 8 fix): "N1" renders group separators under
+# regional formats (e.g. zh-CN "1,300.0"), which broke the CSV column layout
+# once private_mb crossed 1000. "0.0" has no group separator in any culture.
 $deadline = if ($DurationMin -gt 0) { (Get-Date).AddMinutes($DurationMin) } else { $null }
 "timestamp,private_mb,ws_mb,cpu_s,handles,threads" | Out-File $OutCsv -Encoding utf8
 while ($true) {
@@ -30,7 +33,7 @@ while ($true) {
   $children = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" |
     Where-Object { $_.CommandLine -match [regex]::Escape($ProcName) }
   $set = @($main) + @($children | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
-  $row = "{0},{1:N1},{2:N1},{3:N1},{4},{5}" -f (Get-Date -Format o),
+  $row = "{0},{1:0.0},{2:0.0},{3:0.0},{4},{5}" -f (Get-Date -Format o),
     (($set | Measure-Object PrivateMemorySize64 -Sum).Sum / 1MB),
     (($set | Measure-Object WorkingSet64 -Sum).Sum / 1MB),
     (($set | Measure-Object CPU -Sum).Sum),

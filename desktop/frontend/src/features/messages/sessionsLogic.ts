@@ -40,6 +40,11 @@ export const byId = (a: SessionState, b: SessionState) => a.id.localeCompare(b.i
  * at most the per-session cap (default DEFAULT_BUFFER) newest messages per
  * session. Returns prev unchanged for a non-array/empty batch, so React bails
  * out of the re-render exactly like the previous early return.
+ *
+ * The batch is grouped per session and appended with ONE concat per session
+ * (O(prevLen + batchLen)) instead of one array copy per message — the M6 Task
+ * 8 memory wave: the old per-message spread was O(batch × listLen) and churned
+ * a fresh 10k-element array per message at flood rates. Output is identical.
  */
 export function applyMsgsBatch(
   prev: Record<string, MsgOut[]>,
@@ -47,14 +52,35 @@ export function applyMsgsBatch(
   caps: Record<string, number>,
 ): Record<string, MsgOut[]> {
   if (!Array.isArray(batch) || batch.length === 0) return prev;
-  const next = { ...prev };
+  const grouped: Record<string, MsgOut[]> = {};
   for (const m of batch as MsgOut[]) {
     if (!m || typeof m.session_id !== "string") continue;
-    const cap = caps[m.session_id] ?? DEFAULT_BUFFER;
-    const list = next[m.session_id] ? [...next[m.session_id], m] : [m];
-    next[m.session_id] = list.length > cap ? list.slice(list.length - cap) : list;
+    (grouped[m.session_id] ??= []).push(m);
   }
-  return next;
+  return applyPendingMsgs(prev, grouped, caps);
+}
+
+/**
+ * applyPendingMsgs folds already-validated per-session pending lists (the
+ * Task 8 coalescing buffer — many `session:msgs` events accumulated between
+ * animation frames) into the per-session message lists. Same newest-cap
+ * semantics as applyMsgsBatch; per-session order is the arrival order.
+ */
+export function applyPendingMsgs(
+  prev: Record<string, MsgOut[]>,
+  pending: Record<string, MsgOut[]>,
+  caps: Record<string, number>,
+): Record<string, MsgOut[]> {
+  let next: Record<string, MsgOut[]> | null = null;
+  for (const sid of Object.keys(pending)) {
+    const batch = pending[sid];
+    if (!Array.isArray(batch) || batch.length === 0) continue;
+    next ??= { ...prev };
+    const cap = caps[sid] ?? DEFAULT_BUFFER;
+    const merged = next[sid] ? [...next[sid], ...batch] : batch;
+    next[sid] = merged.length > cap ? merged.slice(merged.length - cap) : merged;
+  }
+  return next ?? prev;
 }
 
 /**

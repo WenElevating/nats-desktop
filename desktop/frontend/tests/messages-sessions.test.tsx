@@ -218,9 +218,11 @@ it("refreshes rate/total/dropped from session:state and marks the paused state",
   await renderWithSession();
 
   fireState(state({ rate_msg_s: 42.5, total: 100, dropped: 3 }));
-  const chip = await screen.findByTestId("session-chip-s-1");
-  expect(chip.textContent).toContain("42.5 msg/s");
-  expect(chip.textContent).toContain("100 total");
+  // State events land via the Task 8 frame coalescer — poll for the fold.
+  await waitFor(() =>
+    expect(screen.getByTestId("session-chip-s-1").textContent).toContain("42.5 msg/s"),
+  );
+  expect(screen.getByTestId("session-chip-s-1").textContent).toContain("100 total");
   expect(screen.getByTestId("session-dropped").textContent).toContain("Dropped 3");
 
   fireState(state({ rate_msg_s: 42.5, total: 100, dropped: 3, state: "paused" }));
@@ -317,6 +319,22 @@ it("expands the detail dialog with a headers table and a pretty-printed JSON pay
 
   const payload = within(dialog).getByTestId("detail-payload");
   expect(payload.textContent).toBe('{\n  "b": 1,\n  "a": 2\n}');
+});
+
+it("opens the row detail with Space as well as Enter (⑲)", async () => {
+  await renderWithSession();
+  fireMsgs([msg(1)]);
+  await waitFor(() => expect(rows()).toHaveLength(1));
+
+  fireEvent.keyDown(rows()[0], { key: " " });
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain("m-1");
+
+  // AC-022 Escape-close spot check: the radix Dialog closes on Escape and
+  // focus returns to the row (the same dialog keyboard path the a11y
+  // walkthrough exercises on the real app).
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 // ---- Task additions ----

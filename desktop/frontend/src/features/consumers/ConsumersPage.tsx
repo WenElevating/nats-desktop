@@ -11,7 +11,7 @@ import { ConsumerForm, type ConsumerFormMode } from "./ConsumerForm";
 import { NextPreview } from "./NextPreview";
 import { Sparkline } from "../streams/Sparkline";
 import { formatRate } from "../streams/rates";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

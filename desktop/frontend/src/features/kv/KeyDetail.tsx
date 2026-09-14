@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "../../app/i18n";
-import { formatBytes } from "../messages/schema";
+import { formatBytes } from "../../lib/format";
 import type { KeyHistoryEntry, KeyMeta, KeyValueOut } from "../../lib/bindings";
 import { PayloadView } from "../../lib/payload";
 import { Badge } from "@/components/ui/badge";

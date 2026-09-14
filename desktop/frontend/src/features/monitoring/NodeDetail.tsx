@@ -3,25 +3,16 @@ import { Loader2, RefreshCw, Stethoscope } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
 import { GetServerDetail, type ServerDetail } from "../../lib/bindings";
+import { formatBytes } from "../../lib/format";
 import { formatUptime } from "./ServerTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-/** Human size for the report's byte counters — the messages-page formatBytes
- * caps at MiB (payload ceiling), so monitoring uses its own GiB/TiB ladder. */
-function formatSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KiB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(n < 10 * 1024 ** 2 ? 1 : 0)} MiB`;
-  if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(1)} GiB`;
-  return `${(n / 1024 ** 4).toFixed(1)} TiB`;
-}
-
 /** Max-limits cell: Go maps an unset JS limit to -1 (unlimited). */
 function formatLimit(n: number, unlimited: string): string {
-  return n < 0 ? unlimited : formatSize(n);
+  return n < 0 ? unlimited : formatBytes(n);
 }
 
 const num = (v: number | bigint): string => Number(v).toLocaleString("en-US");
@@ -95,7 +86,9 @@ export function NodeDetail({ server }: NodeDetailProps) {
     );
   }
 
-  // Panel-level failure: error card with the server原文.
+  // Panel-level failure: error card with the server原文 + a retry button that
+  // reuses the refresh entry (M6 Task 8 ㉓ — a rejected report is often a
+  // transient privilege/timeout, so the card must offer a direct way out).
   if (err) {
     return (
       <div
@@ -104,6 +97,21 @@ export function NodeDetail({ server }: NodeDetailProps) {
       >
         <p className="font-medium text-[var(--danger-fg)]">{t("monitor.node.errorTitle")}</p>
         <p className="mt-1 break-all text-xs text-[var(--fg-muted)]">{err}</p>
+        <Button
+          size="sm"
+          variant="outline"
+          data-testid="node-error-retry"
+          onClick={() => void load()}
+          disabled={loading || !connected}
+          className="mt-2 h-7 shrink-0 px-2"
+        >
+          {loading ? (
+            <Loader2 size={13} strokeWidth={1.75} className="animate-spin" aria-hidden="true" />
+          ) : (
+            <RefreshCw size={13} strokeWidth={1.75} aria-hidden="true" />
+          )}
+          {t("monitor.node.retry")}
+        </Button>
       </div>
     );
   }
@@ -198,15 +206,15 @@ export function NodeDetail({ server }: NodeDetailProps) {
         {/* varz stats grid */}
         <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-x-3 gap-y-2">
           {stat("cpu", t("monitor.node.stat.cpu"), `${r.cpu.toFixed(1)}%`)}
-          {stat("mem", t("monitor.node.stat.mem"), formatSize(r.mem_bytes))}
+          {stat("mem", t("monitor.node.stat.mem"), formatBytes(r.mem_bytes))}
           {stat("cores", t("monitor.node.stat.cores"), num(r.cores))}
           {stat("conns", t("monitor.node.stat.conns"), num(r.connections))}
           {stat("subs", t("monitor.node.stat.subs"), num(detail.num_subs))}
           {stat("leaf", t("monitor.node.stat.leaf"), num(detail.leaf_nodes))}
           {stat("sent-msgs", t("monitor.node.stat.sentMsgs"), num(detail.sent_msgs))}
-          {stat("sent-bytes", t("monitor.node.stat.sentBytes"), formatSize(detail.sent_bytes))}
+          {stat("sent-bytes", t("monitor.node.stat.sentBytes"), formatBytes(detail.sent_bytes))}
           {stat("recv-msgs", t("monitor.node.stat.recvMsgs"), num(detail.recv_msgs))}
-          {stat("recv-bytes", t("monitor.node.stat.recvBytes"), formatSize(detail.recv_bytes))}
+          {stat("recv-bytes", t("monitor.node.stat.recvBytes"), formatBytes(detail.recv_bytes))}
           {stat("uptime", t("monitor.node.stat.uptime"), formatUptime(r.uptime_seconds))}
           {stat(
             "start",

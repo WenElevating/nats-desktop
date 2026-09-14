@@ -145,29 +145,66 @@ it("queries the selected server with default cid/0/20 and renders all columns wi
 it("header-click sorts by whitelisted keys; repeating the click flips direction locally without refetching", async () => {
   await setup();
 
-  // First click: sort key passes through to the binding, page resets.
+  // First click: sort key passes through to the binding, page resets. The
+  // server returns non-cid keys DESCENDING (connz semantics) — M6 Task 8 ㉑
+  // labels the initial screen accordingly.
   fireEvent.click(screen.getByTestId("conn-sort-subs"));
   await flush();
   expect(ListServerConnections).toHaveBeenLastCalledWith("nats1", "subs", 0, 20);
-  expect(screen.getByTestId("conn-col-subs").getAttribute("aria-sort")).toBe("ascending");
+  expect(screen.getByTestId("conn-col-subs").getAttribute("aria-sort")).toBe("descending");
 
-  // Server returns rows in cid order; ascending shows them as-is.
+  // Server returns rows in cid order; the default (descending) shows them as-is.
   expect(rowIds()).toEqual(["conn-row-7", "conn-row-8", "conn-row-9"]);
 
-  // Second click on the same column: local flip to descending, no new call —
-  // the Go whitelist (Global 11) accepts bare keys only, so the direction is
-  // applied within the fetched page.
+  // Second click on the same column: local flip to the opposite direction, no
+  // new call — the Go whitelist (Global 11) accepts bare keys only, so the
+  // direction is applied within the fetched page.
   const calls = vi.mocked(ListServerConnections).mock.calls.length;
   fireEvent.click(screen.getByTestId("conn-sort-subs"));
   await flush();
   expect(vi.mocked(ListServerConnections).mock.calls.length).toBe(calls);
-  expect(screen.getByTestId("conn-col-subs").getAttribute("aria-sort")).toBe("descending");
+  expect(screen.getByTestId("conn-col-subs").getAttribute("aria-sort")).toBe("ascending");
   expect(rowIds()).toEqual(["conn-row-9", "conn-row-8", "conn-row-7"]);
 
   // A different column goes through the binding again (offset reset to 0).
   fireEvent.click(screen.getByTestId("conn-sort-pending"));
   await flush();
   expect(ListServerConnections).toHaveBeenLastCalledWith("nats1", "pending", 0, 20);
+});
+
+it("initial aria-sort follows the server semantics per key (cid ascending, others descending)", async () => {
+  await setup();
+
+  // Default screen: cid ascending.
+  expect(screen.getByTestId("conn-col-cid").getAttribute("aria-sort")).toBe("ascending");
+  expect(screen.getByTestId("conn-col-subs").getAttribute("aria-sort")).toBeNull();
+
+  // First click on msgs_from (non-cid) is labeled descending immediately —
+  // the falsification for the old hardcoded-ascending first screen.
+  fireEvent.click(screen.getByTestId("conn-sort-msgs_from"));
+  await flush();
+  expect(screen.getByTestId("conn-col-msgs_from").getAttribute("aria-sort")).toBe("descending");
+  expect(screen.getByTestId("conn-col-cid").getAttribute("aria-sort")).toBeNull();
+
+  // cid keeps its ascending default when re-selected.
+  fireEvent.click(screen.getByTestId("conn-sort-cid"));
+  await flush();
+  expect(screen.getByTestId("conn-col-cid").getAttribute("aria-sort")).toBe("ascending");
+});
+
+it("keeps the loaded page + toasts when the transport throws (no blank-out)", async () => {
+  await setup();
+  expect(rowIds()).toEqual(["conn-row-7", "conn-row-8", "conn-row-9"]);
+
+  // Transport-level rejection on refresh: M6 Task 8 ㉒ — the existing page
+  // stays and the failure surfaces as a toast (NodeDetail error-card parity).
+  vi.mocked(ListServerConnections).mockRejectedValueOnce(new Error("websocket closed") as never);
+  fireEvent.click(screen.getByTestId("conn-refresh"));
+  await flush();
+
+  expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("websocket closed"));
+  expect(rowIds()).toEqual(["conn-row-7", "conn-row-8", "conn-row-9"]);
+  expect(screen.getByTestId("conn-total").textContent).toBe("42");
 });
 
 it("pages with offset, resets on limit change, and disables the buttons at the edges", async () => {

@@ -8,6 +8,7 @@ import { CreateSysWatch, StopSysWatch } from "../../lib/bindings";
 import { Badge } from "@/components/ui/badge";
 import {
   formatEventTime,
+  pushEvent,
   toSysWatchEvent,
   type SysEvent,
 } from "../monitoring/EventsPanel";
@@ -38,12 +39,12 @@ export const ADVISORY_TYPES = [
 export const ADVISORY_RING_CAPACITY = 100;
 
 /**
- * Pure ring helper: prepend and cap at `cap` entries (newest first). Exported
- * so tests can drive the 100-truncation directly without firing 100 DOM
- * events (EventsPanel.pushEvent 同款).
+ * Pure ring helper: prepend and cap at `cap` entries (newest first). M6 Task
+ * 8 ㉛: the body is delegated to EventsPanel.pushEvent — one ring primitive,
+ * the advisory ring just carries its own 100-entry default cap.
  */
 export function pushAdvisory<T>(ring: T[], e: T, cap = ADVISORY_RING_CAPACITY): T[] {
-  return ring.length >= cap ? [e, ...ring.slice(0, cap - 1)] : [e, ...ring];
+  return pushEvent(ring, e, cap);
 }
 
 export interface AdvisoryListProps {

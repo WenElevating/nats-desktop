@@ -282,3 +282,24 @@ Go 侧计时程序为 OS 临时目录一次性测量脚本（`%TEMP%\ac028.go`�
 | 任意位置跳转（关联） | 搜索跳转 70–78ms（近似）；滚动手测 PENDING-MANUAL | 近似 PASS |
 | 数据集 | 4333 在位：10,002 流 / 1M×256B 消息 / 100k KV 键（Task 7 典型负载直接复用） | — |
 
+
+## 7. Task 8 复测：实时推送合并（coalescing）修复后的典型负载内存（2026-09-14 18:24–19:27）
+
+Task 8 在 `useSessions` 落地实时推送合并修复（`session:msgs` 事件先入 ref 待处理缓冲，每动画帧一次 `applyPendingMsgs` 折叠入 React state；`document.hidden` 时暂停、visibilitychange 恢复；缓冲 2×cap 高水位裁剪；`clear()` 同步丢弃未折叠缓冲）。本节为修复后的同剖面复测（Task 5 §1.5 腿 A 口径：1 连接 local-test@4333 + 1 实时会话 @1k msg/s + 会话页挂载）。
+
+**环境差异声明（对照 Task 5 腿 A，判读时必须纳入）**：① Task 5 跑在锁屏 `visibilityState=hidden` 下（监控轮询被门禁暂停、合成器不绘制）；本轮窗口为**前台可见**（165Hz 面板，rAF 驱动 60 帧/s 折叠 + 真实合成），负载只高不低。② 运行 A 附加 `--force-renderer-accessibility`（UIA 树稳定暴露所需），运行 B 无该 flag（M5 自然激活法）。
+
+**命令（照录）**：`wails3 task windows:build VERSION=1.0.0`（含 Task 8 修复）→ `bin\flood.exe -url nats://127.0.0.1:4333 -subject m6mem.x -rate 1000 -size 1024 -dur 35m|25m` → UIA 建实时会话（`scripts/uia-create-session.ps1`，M5 方法）→ `scripts/perf-sample.ps1 -IntervalSec 60 -DurationMin 30|20`。采样器本轮修复一处缺陷：`N1` 数字格式在中文区域下输出千位逗号破坏 CSV 列（如 `1,300.0`），改 `0.0` 无分组格式（§0.1 注记作废，CSV 列自此严格 6 列）。
+
+| 腿 | 条件 | 稳态 private（主+WebView2 树求和） | 进程分解 | 会话状态守恒 |
+|---|---|---|---|---|
+| 运行 A（30min，forced-a11y） | 窗口可见 + `--force-renderer-accessibility` | **1,637.9–1,701.5MB**（末 20 采样中位 **1,681.4MB**；前 8 分钟爬坡段锯齿峰值 3,334MB 后回落） | renderer ~2,989MB（爬坡段）；稳态回落 | 总收 733,686 时已丢弃 723,686 → **保留恰 10,000** |
+| 运行 B（20min，无 flag） | 窗口可见 + UIA 自然激活（M5 法） | 末 10 采样 **1,268.4–1,323.8MB**（中位 **1,293.7MB**；GC 锯齿谷值 361.8MB） | 增量在 renderer（与 Task 5 同） | 同上口径（chip 读数 952–970 msg/s 与发布端一致） |
+
+**对照 Task 5 腿 A（修复前）**：1,376–1,551MB 锯齿稳态（hidden、监控轮询门禁暂停——口径偏低）。修复后运行 B **1,268–1,324MB**：在窗口可见（更重合成/rAF 负载）条件下稳态中位下降 ~9%（1,293.7 vs ~1,432 估计中位），锯齿谷值深至 361.8MB（修复前未见）。
+
+**判定口径（如实）**：① **每次事件 setState 的病理已消除**（组件级：`tests/messages-sessions-coalesce.test.tsx` 7 用例钉住「缓冲期零 setState / 一帧一折 / 顺序守恒 / 高水位有界 / 隐藏暂停 / clear 不复活 / 卸载取消」；10k 消息 ingest+flush <2s 门禁保持）。② **状态面精确有界**：实测显示缓冲恰为 cap=10,000，高水位裁剪无泄漏（35min 连续负载进程树句柄/线程数平稳：~3,806–3,868 / 154–174）。③ **稳态常驻仍高于 300MB 门禁**（1.3GB 量级）——与 Task 5 判定一致：V8/PartitionAlloc 已提交页不归还 OS（Task 5 §1.5 停载后不回落观察仍成立），内存门禁 AC-023 的 FAIL 结论**不变**；批量模式杠杆（653.8MB，-52%）仍是最有效缓解，合并修复在其上叠加渲染次数 1000→~60/s 的响应性收益。④ 运行 A 证明 forced-a11y 客户端常驻时 renderer 多占 ~350MB——无障碍客户端挂载场景的内存代价首次量化，登记为已知面。
+
+原始 CSV：`desktop/bin/perf-task8-postfix.csv`（运行 A，31 采样）、`desktop/bin/perf-task8-postfix-noa11yflag.csv`（运行 B，21 采样）。
+
+UIA 冒烟同场证据：会话 chip 实时读数 970→952 msg/s、`共 N 条 / 已丢弃 N−10,000 条` 精确守恒（`scripts/uia-session-rate.ps1` 读值）；flood 发布端 2,096,091 条 @998 msg/s（99.8%）。

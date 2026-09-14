@@ -302,6 +302,12 @@ it("polls the selected stream detail and switches the rate window", async () => 
   // Right pane shows the empty-state guidance before a selection.
   expect(screen.getByTestId("streams-detail-empty")).toBeTruthy();
 
+  // ⑲: Space alone activates the focused row (Enter-only handler falsified).
+  fireEvent.keyDown(screen.getByTestId("stream-row-ORDERS"), { key: " " });
+  await flush();
+  expect(GetStreamDetail).toHaveBeenCalledWith("ORDERS");
+  expect(screen.getByTestId("stream-detail")).toBeTruthy();
+
   fireEvent.click(screen.getByTestId("stream-row-ORDERS"));
   await flush();
   expect(GetStreamDetail).toHaveBeenCalledTimes(1);
