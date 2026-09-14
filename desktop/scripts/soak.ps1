@@ -36,7 +36,10 @@
 #   powershell ... -File scripts\soak.ps1 -Hours 0.1                                    # ~6min validation
 #   powershell ... -File scripts\soak.ps1 -Hours 0.5 -OutDir D:\somewhere               # 30min validation
 # Exit codes: 0 = ran to completion (verdict.txt written); 3 = app crash
-# detected (CRASH.txt written, CSV kept); 2 = harness/setup failure.
+# detected (CRASH.txt written, CSV kept — includes app death that surfaces as
+# a harness error, re-classified via the liveness probe); 2 = harness/setup
+# failure. Flood early-exit is NOT fatal: WARN-logged once and surfaced in the
+# verdict as "flood ran full duration: no ..." so a false-PASS cannot hide it.
 param(
   [double]$Hours = 24,
   [string]$Subject = "soak.load",
@@ -272,6 +275,36 @@ function Stop-SoakChildren {
 
 function Test-AppAlive { return [bool](Get-Process -Id $appPid -ErrorAction SilentlyContinue) }
 
+# CRASH path (shared by the main-loop detector and the catch-block classifier):
+# keep the CSV, write the marker (timestamp, last sample, WER delta), exit 3.
+# A crash is data, not a harness failure.
+function Write-CrashExit([string]$reason) {
+  Write-Log ("CRASH detected: {0}" -f $reason)
+  $lastRow = ""
+  if (Test-Path $csvPath) {
+    $rows = @(Import-Csv $csvPath)
+    if ($rows.Count -gt 0) {
+      $lr = $rows[$rows.Count - 1]
+      $lastRow = "{0} private={1} handles={2} threads={3}" -f $lr.timestamp, $lr.private_mb, $lr.handles, $lr.threads
+    }
+  }
+  $werNow = Get-WerCount $runStart
+  $marker = @(
+    "CRASH: $($reason)",
+    "detected_at: $((Get-Date).ToString("o"))",
+    "run_start: $($runStart.ToString("o"))",
+    "elapsed_min: $([math]::Round(((Get-Date) - $runStart).TotalMinutes, 1))",
+    "last_sample: $lastRow",
+    "new_wer_reports_since_start: $werNow",
+    "samples_csv: $csvPath",
+    "flood_log: $floodLog",
+    "soak_log: $logPath"
+  )
+  $marker | Out-File (Join-Path $OutDir "CRASH.txt") -Encoding utf8
+  Write-Log ("CRASH.txt written; samples kept at {0}" -f $csvPath)
+  exit 3
+}
+
 # --- session creation via UIA (brief step 4; M5 method) ----------------------
 # Throws on failure -> harness failure (exit 2): the session leg is mandatory.
 function New-SoakSession {
@@ -385,6 +418,8 @@ $consecMiss = 0
 $lastCycleAt = Get-Date
 $evDone = $false
 $evidence1 = "(not taken)"
+$floodDied = $false
+$floodDiedAt = ""
 try {
   $win = Wait-UiTree 120
   if (-not $win) { throw "UIA tree did not activate within 120s" }
@@ -399,6 +434,21 @@ try {
       break
     }
     if ($now -ge $deadline) { break }
+
+    # flood liveness (T7 review fix-first #1): flood runs nats.NoReconnect and
+    # exits on its first publish/connection error, so a 4333 hiccup silently
+    # kills the load leg while the rest of the soak keeps going. Checked once
+    # per iteration; only the FIRST detection is logged (never spammy) and it
+    # is surfaced in the verdict as "flood ran full duration: no".
+    if (-not $floodDied) {
+      try {
+        if ($flood.HasExited) {
+          $floodDied = $true
+          $floodDiedAt = $now.ToString("o")
+          Write-Log ("WARN flood injector exited early at {0} (pid={1}); continuing soak without injected load" -f $floodDiedAt, $flood.Id)
+        }
+      } catch { }
+    }
 
     # evidence t0 just before the deadline, while flood is still publishing:
     # the t0/t1 counter pair then spans live flood time (t1 taken after the
@@ -427,11 +477,11 @@ try {
       }
       if ($crashReason) { break }
       if ($clicked) {
-        $navMisses = 0; $consecMiss = 0
+        $consecMiss = 0
         Write-Log ("nav cycle {0}: -> '{1}' ok" -f $cycle, $target)
       } else {
-        $consecMiss++
-        Write-Log ("nav cycle {0}: MISS '{1}' (consecutive={2})" -f $cycle, $target, $consecMiss)
+        $navMisses++; $consecMiss++
+        Write-Log ("nav cycle {0}: MISS '{1}' (consecutive={2}, total={3})" -f $cycle, $target, $consecMiss, $navMisses)
       }
       $navIdx = ($navIdx + 1) % $navLabels.Count
       $lastCycleAt = Get-Date
@@ -441,30 +491,7 @@ try {
 
   if ($crashReason) {
     # ---- CRASH PATH: keep the CSV, write the marker, exit 3 -----------------
-    Write-Log ("CRASH detected: {0}" -f $crashReason)
-    $lastRow = ""
-    if (Test-Path $csvPath) {
-      $rows = @(Import-Csv $csvPath)
-      if ($rows.Count -gt 0) {
-        $lr = $rows[$rows.Count - 1]
-        $lastRow = "{0} private={1} handles={2} threads={3}" -f $lr.timestamp, $lr.private_mb, $lr.handles, $lr.threads
-      }
-    }
-    $werNow = Get-WerCount $runStart
-    $marker = @(
-      "CRASH: $($crashReason)",
-      "detected_at: $((Get-Date).ToString("o"))",
-      "run_start: $($runStart.ToString("o"))",
-      "elapsed_min: $([math]::Round(((Get-Date) - $runStart).TotalMinutes, 1))",
-      "last_sample: $lastRow",
-      "new_wer_reports_since_start: $werNow",
-      "samples_csv: $csvPath",
-      "flood_log: $floodLog",
-      "soak_log: $logPath"
-    )
-    $marker | Out-File (Join-Path $OutDir "CRASH.txt") -Encoding utf8
-    Write-Log ("CRASH.txt written; samples kept at {0}" -f $csvPath)
-    exit 3
+    Write-CrashExit $crashReason
   }
   # normal completion: keep processes alive for the evidence read below;
   # Stop-SoakChildren runs explicitly after it (finally only cleans on
@@ -473,6 +500,13 @@ try {
 } catch {
   Write-Log ("FATAL harness error: {0}" -f $_.Exception.Message)
   Write-Log ($_ | Out-String)
+  # T7 review fix-first #2: classify early app death. If the app process is
+  # already gone, the harness error is a SYMPTOM of an app crash (e.g. the
+  # UIA tree vanished because the app died) — record it as crash data
+  # (CRASH.txt with WER delta, exit 3), not as a harness fault (exit 2).
+  if (-not (Test-AppAlive)) {
+    Write-CrashExit ("app process pid={0} gone when harness error surfaced at {1}; original harness error: {2}" -f $appPid, (Get-Date -Format o), $_.Exception.Message)
+  }
   exit 2
 } finally {
   if (-not $script:skipCleanup) { Stop-SoakChildren }
@@ -532,6 +566,12 @@ if (-not (Test-Path $csvPath)) {
   } else {
     $first = $pts[0]; $last = $pts[$pts.Count - 1]
     $durH = ($last.ts - $first.ts).TotalHours
+    # CSV freshness guard (T7 review): a stalled sampler would make the
+    # end-state gates read stale data — annotate BEFORE they are computed.
+    $staleSec = ($runEnd - $last.ts).TotalSeconds
+    if ($staleSec -gt (3 * $NavIntervalSec)) {
+      $lines += ("    NOTE csv-freshness: last sample is {0}s old at verdict time (> 3x interval {1}s) - sampler may have stalled; judge end-state numbers accordingly" -f [math]::Round($staleSec, 0), $NavIntervalSec)
+    }
     # 1h point: sample nearest t0+1h (criterion needs a run >= 1h)
     $h1Target = $first.ts.AddHours(1)
     $h1 = $pts | Sort-Object { [math]::Abs(($_.ts - $h1Target).TotalSeconds) } | Select-Object -First 1
@@ -598,7 +638,14 @@ if ($null -ne $t0c -and $null -ne $t1c) {
 }
 $lines += ("    counter growth: {0}" -f $evGrowth)
 $lines += ""
-$lines += ("nav cycles={0} misses(total consecutive-max logged in soak.log) navmiss_streak_end={1}" -f $cycle, $consecMiss)
+# flood liveness verdict line (T7 review fix-first #1): guards against a
+# silent false-PASS when a 4333 hiccup killed the injector mid-run.
+if ($floodDied) {
+  $lines += ("flood ran full duration: no (injector exited early, first detected {0} - flood uses nats.NoReconnect so a 4333 hiccup kills the load; judge load-dependent evidence accordingly)" -f $floodDiedAt)
+} else {
+  $lines += "flood ran full duration: yes"
+}
+$lines += ("nav cycles={0} nav_misses_total={1} navmiss_streak_end={2}" -f $cycle, $navMisses, $consecMiss)
 $lines += ("files: csv={0}" -f $csvPath)
 $lines += ("       log={0} flood={1} applog_tail={2}" -f $logPath, $floodLog, (Join-Path $OutDir "applog-tail.log"))
 $lines += ("flood tail: {0}" -f ((Get-Content $floodLog -Tail 3 -ErrorAction SilentlyContinue) -join " | "))

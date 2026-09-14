@@ -19,6 +19,7 @@
 2. 4333 存活：`netstat -ano | findstr :4333`（LISTENING 在案）；数据集在位（流页可见 `LOAD_S%05d`）。
 3. `%APPDATA%\nats-desktop\settings.json`：`last_active_context` = `local-test`（启动即自动重连 4333）；`behavior.session_push_batching` = `false`（§12 典型负载 = 实时推送会话）。
 4. 无其他 `nats-desktop.exe` / `flood.exe` 实例（脚本 preflight 会杀残留实例并留痕，但最好人工保证）。
+5. **电源计划 = 从不睡眠**（挂机期间系统不得睡眠/休眠，否则 UIA 链路与采样全部冻结，跑不满 24h）。
 
 启动（挂机 24h，命令窗保持开着；锁屏无碍）：
 
@@ -54,6 +55,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\soak.ps1
 | 3 | 句柄/线程平稳 | 首末对比 + 全程线性回归斜率（/h）+ **ref 点（1h 采样）vs 末点**对比（首采样点含 WebView2 子进程孵化期的爬坡，判读以 ref 点为准）；ref 相对变化 ≤20% 记 STABLE | 斜率≈0 / 目测平稳 |
 
 第 [5] 项会话管线证据（flood 停止前后两次 UIA 读会话计数）：计数增长 = Go 侧会话管线全程存活（导航轮换离开消息页期间会话不中断）。
+
+T7 review 守卫（verdict.txt 新增行，收数必读）：`flood ran full duration: yes/no`——no = 注入器提前退出（flood 用 `nats.NoReconnect`，4333 抖动即自杀退出），此时负载相关的判读（[5] 计数、保留/丢弃数）口径失效，按 soak.log 首检 WARN 时刻复核；`nav_misses_total` = 全程导航 MISS 累计（区别于末轮连续 MISS）；末采样距今 >3× 采样间隔时在 [2][3][4] 前附 `csv-freshness` 注记（采样器疑似停摆，末态数字保守判读）。
 
 ## 4. 输出文件布局（`desktop\bin\soak-<yyyyMMdd-HHmmss>\`）
 
