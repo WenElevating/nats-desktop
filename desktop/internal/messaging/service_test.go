@@ -290,7 +290,9 @@ func TestServiceFullChainLocalServer(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("Publish: %+v", res)
 	}
-	st = waitSessionTotal(t, svc.Sessions, st.ID, 1, 5*time.Second)
+	// Delivery wait is infrastructure tolerance (assertion is the message
+	// landed, not when): 10s headroom per the M6 T1 flake list.
+	st = waitSessionTotal(t, svc.Sessions, st.ID, 1, 10*time.Second)
 	if st.BufferUsed != 1 {
 		t.Fatalf("BufferUsed = %d, want 1", st.BufferUsed)
 	}

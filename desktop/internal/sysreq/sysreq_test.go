@@ -38,9 +38,13 @@ func startPlain(t *testing.T) string {
 	return srv.ClientURL()
 }
 
+// connect opens the sys user connection. The nats.Timeout budget is pure
+// infrastructure tolerance (loopback to an embedded server); full-suite
+// parallel load can stretch the handshake past tight windows (M6 T1 flake
+// list), so it is generous on purpose — no assertion depends on it.
 func connect(t *testing.T, url string) *nats.Conn {
 	t.Helper()
-	nc, err := nats.Connect(url, nats.UserInfo("sys", "syspass"), nats.Timeout(2*time.Second), nats.MaxReconnects(0))
+	nc, err := nats.Connect(url, nats.UserInfo("sys", "syspass"), nats.Timeout(10*time.Second), nats.MaxReconnects(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +58,10 @@ func TestDoReqPlainPing(t *testing.T) {
 	url := startPlain(t)
 	nc := connect(t, url)
 
-	res, err := DoReq(context.Background(), nil, "$SYS.REQ.SERVER.PING", 0, nc, 2*time.Second, nil)
+	// Request deadline is infrastructure tolerance only (the assertion is that
+	// at least one parseable stats response arrives, however long the loaded
+	// scheduler takes to deliver it): 10s headroom per the M6 T1 flake list.
+	res, err := DoReq(context.Background(), nil, "$SYS.REQ.SERVER.PING", 0, nc, 10*time.Second, nil)
 	if err != nil {
 		t.Fatalf("DoReq: %v", err)
 	}
@@ -76,7 +83,10 @@ func TestDoReqNoResponders(t *testing.T) {
 	url := startPlain(t)
 	nc := connect(t, url)
 
-	_, err := DoReq(context.Background(), nil, "$SYS.REQ.SERVER.NOPE.VARZ", 1, nc, 1*time.Second, nil)
+	// Same load-tolerance rationale: the 503 arrives immediately in healthy
+	// conditions; the wide budget only covers scheduler starvation (a timeout
+	// here would surface as err==nil, i.e. a flake).
+	_, err := DoReq(context.Background(), nil, "$SYS.REQ.SERVER.NOPE.VARZ", 1, nc, 10*time.Second, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -103,7 +113,7 @@ func TestDoReqSnappyOptOut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := DoReq(context.Background(), nil, "sysreq.probe", 1, nc, 2*time.Second, nil); err != nil {
+	if _, err := DoReq(context.Background(), nil, "sysreq.probe", 1, nc, 10*time.Second, nil); err != nil {
 		t.Fatal(err)
 	}
 	select {

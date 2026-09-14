@@ -12,11 +12,15 @@ func TestStartSysServerPermissions(t *testing.T) {
 	f := StartSysServer(t)
 
 	sysNc := ConnectUser(t, f.URL, f.SysUser, f.SysPass)
-	if _, err := sysNc.Request("$SYS.REQ.SERVER.PING", nil, 2*time.Second); err != nil {
+	// 请求超时是基础设施容差（M6 T1 flake 名单）：全量套件并行时嵌入服务器的
+	// 应答可能错过紧窗口，放宽到 10s 不弱化任何断言（断言只看应答可达）。
+	if _, err := sysNc.Request("$SYS.REQ.SERVER.PING", nil, 10*time.Second); err != nil {
 		t.Fatalf("sys user should reach $SYS.REQ.SERVER.PING: %v", err)
 	}
 
 	appNc := ConnectUser(t, f.URL, f.AppUser, f.AppPass)
+	// app 用户这条保持 2s：no-responders 503 是服务器即时返回，超时同样满足
+	// err != nil——负载只会让它更容易通过，不存在负载 flake 方向。
 	if _, err := appNc.Request("$SYS.REQ.SERVER.PING", nil, 2*time.Second); err == nil {
 		t.Fatal("app user must not reach $SYS.REQ.SERVER.PING")
 	}
@@ -38,10 +42,10 @@ func TestStartSysServerPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	appNc.Close()
-	// advisory 由服务器异步发布；给足窗。
+	// advisory 由服务器异步发布；给足窗（5s 在全量并行负载下偶发错过，M6 T1）。
 	select {
 	case <-advisories:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("no disconnect advisory observed on $SYS.ACCOUNT.*.DISCONNECT")
 	}
 }

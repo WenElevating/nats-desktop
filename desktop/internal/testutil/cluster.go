@@ -297,10 +297,12 @@ func metaClusterFormed(nc *nats.Conn, n int) bool {
 	return false
 }
 
-// ConnectUser 以指定用户连接并在测试结束后关闭。
+// ConnectUser 以指定用户连接并在测试结束后关闭。nats.Timeout 是纯基础设施
+// 容差（环回 + 服务器已 ReadyForConnections）：全量套件并行负载可拖长握手
+// （M6 T1 flake 名单），故意放宽到 10s——没有任何断言依赖握手耗时。
 func ConnectUser(t testing.TB, url, user, pass string) *nats.Conn {
 	t.Helper()
-	nc, err := nats.Connect(url, nats.UserInfo(user, pass), nats.Timeout(2*time.Second), nats.MaxReconnects(-1))
+	nc, err := nats.Connect(url, nats.UserInfo(user, pass), nats.Timeout(10*time.Second), nats.MaxReconnects(-1))
 	if err != nil {
 		t.Fatalf("connect %s as %s: %v", url, user, err)
 	}

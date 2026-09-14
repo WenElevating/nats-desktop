@@ -65,9 +65,12 @@ func createJSStream(t *testing.T, nc *nats.Conn, name string, subjects ...string
 }
 
 // connect opens a plain client connection to url, failing the test on error.
+// Unlike requireLocalServer's 2s probe (skip semantics — do not touch), this
+// runs against a server already known up, so its budget is pure load
+// tolerance: 10s headroom per the M6 T1 flake list.
 func connect(t *testing.T, url string) *nats.Conn {
 	t.Helper()
-	nc, err := nats.Connect(url, nats.Timeout(2*time.Second))
+	nc, err := nats.Connect(url, nats.Timeout(10*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
