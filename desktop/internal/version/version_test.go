@@ -94,3 +94,76 @@ func TestCurrentDefaultNotInjected(t *testing.T) {
 		t.Fatalf("default appVersion = %q, want 0.1.0 (bump via ldflags, not source)", got)
 	}
 }
+
+// TestCompareVersionsSemantics: 边界语义按现有实现锁定——等长/不等长（缺失段
+// 计 0）/前导零/预发布后缀段（非数字计 0，即被忽略）。改动比较语义时本表必须
+// 显式修订，不得顺手变更。
+func TestCompareVersionsSemantics(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"v1.2.3", "v1.2.3", 0},       // 等长等值
+		{"v1.2", "v1.2.0", 0},         // 不等长：缺失尾段计 0
+		{"v1.2.0.0", "v1.2", 0},       // 多余尾段全 0 亦等值
+		{"v01.02.03", "v1.2.3", 0},        // 前导零按十进制解析
+		{"v1.0.0-rc", "v1.0.0", 0},        // 非数字段计 0（后缀本身忽略）
+		{"v1.0.0-rc.1", "v1.0.0", 1},      // 实现锁定：后缀点后的数字段仍参与比较
+		{"v1.0.0-rc.1", "v1.0.0-rc.2", -1}, // 同上：rc.1 < rc.2
+		{"v1.0.0-rc.1", "v1.0.1", -1},     // 前三段仍主导序
+		{"", "v0.0.1", -1},            // 空串 → 全 0 段（splitSegments nil 分支）
+		{" v1.0.0 ", "v1.0.0", 0},     // 空白剥离
+	}
+	for _, c := range cases {
+		if got := CompareVersions(c.a, c.b); got != c.want {
+			t.Fatalf("CompareVersions(%q,%q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// TestCheckLatestContextCancelIsError: 已取消 ctx + 慢响应 → 立即返回 cancelled
+// 类错误，不 panic、不等待慢响应完成（§6.13 失败静默半边的前提）。
+func TestCheckLatestContextCancelIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.Write([]byte(`{"tag_name": "v9.9.9"}`))
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 调用前即取消：传输层确定性失败
+	if _, err := CheckLatestAt(ctx, srv.URL, "v1.0.0"); err == nil {
+		t.Fatal("cancelled context must surface as error")
+	}
+}
+
+// TestCheckLatestEmptyTagIsError: 200 但缺 tag_name → 显式错误（此前未覆盖分支）；
+// 非 JSON body → 解码错误。二者都不得产出零值 UpdateInfo。
+func TestCheckLatestEmptyTagIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"html_url": "https://github.com/x/y"}`))
+	}))
+	defer srv.Close()
+	if info, err := CheckLatestAt(context.Background(), srv.URL, "v1.0.0"); err == nil {
+		t.Fatalf("missing tag_name must error, got %+v", info)
+	}
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`not json`))
+	}))
+	defer srv2.Close()
+	if info, err := CheckLatestAt(context.Background(), srv2.URL, "v1.0.0"); err == nil {
+		t.Fatalf("bad body must error, got %+v", info)
+	}
+}
+
+// TestServiceFacadeDefaults: facade 的 AppVersion 直通 Current；CheckTimeout
+// 暴露 5s 上限供调用方对齐（§6.13）。
+func TestServiceFacadeDefaults(t *testing.T) {
+	s := NewService()
+	if s.AppVersion() != Current() {
+		t.Fatalf("AppVersion = %q, want Current() = %q", s.AppVersion(), Current())
+	}
+	if got := CheckTimeout(); got != 5*time.Second {
+		t.Fatalf("CheckTimeout = %v, want 5s", got)
+	}
+}

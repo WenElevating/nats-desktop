@@ -21,10 +21,13 @@ import (
 // 无法验证 $SYS 权限降级与 advisory 事件流；本文件补齐：
 //   - StartSysServer: 单节点 + SYS/APP 双账户 + 系统账户接线（sys 用户可
 //     访问 $SYS、app 用户不可——§8.3.1 降级路径与 AC-016 的夹具基础）。
-//   - StartCluster: n 节点 JS 集群（Cluster.Port=-1 随机；Start() 把解析后
-//     的真实端口写回 opts——boot 就绪等待保证写回完成），路由指向
-//     首节点、mesh 自动成型；等待 meta leader 选举完成后返回。
-// 端口/选举等待在 Windows 上放宽（Global 14）。
+//   - StartCluster: n 节点 JS 集群（Cluster.Port 随机解析；boot 的就绪等待
+//     保证真实端口写回 opts）。seed 显式绑定探测出的空闲端口，并把指向
+//     自身的路由作为已配置路由（JS 集群模式要求至少一条配置路由；自路由
+//     握手后按 DuplicateRoute 关闭，无重连风暴），其余节点 solicit 到 seed；
+//     就绪判据见 StartCluster 注释。
+// 端口/选举等待在 Windows 上放宽（Global 14）。全部助手收 testing.TB
+// （M6 T4 ㉟：benchmark 直呼），函数体只用 TB 接口方法。
 // ---------------------------------------------------------------------------
 
 const (
@@ -59,7 +62,7 @@ type SysServer struct {
 
 // StartSysServer 启动带系统账户的单节点（JS 开启、随机端口、StoreDir 在
 // t.TempDir()）。返回后 sys 用户即可请求 $SYS、订阅 advisory。
-func StartSysServer(t *testing.T) SysServer {
+func StartSysServer(t testing.TB) SysServer {
 	t.Helper()
 	accs, users := sysAccounts()
 	opts := &server.Options{
@@ -106,7 +109,7 @@ type ClusterNode struct {
 	Name string
 	URL  string
 	Srv  *server.Server
-	Opts *server.Options // 启动后 Cluster.Port 已是真实端口（Start() 写回）
+	Opts *server.Options // 启动后 Cluster.Port 已是真实端口（boot 的就绪等待保证写回完成）
 }
 
 type Cluster struct {
@@ -115,10 +118,15 @@ type Cluster struct {
 	AppUser, AppPass string
 }
 
-// StartCluster 启动 n 节点 JS 集群（n>=1；测试一律传 3）。等待路由成型
-// （$SYS PING 广播应答数 == n，经 sys 用户）与 meta leader 选举（jsz
-// Meta.Leader 非空）后返回；总等待上限 30s（Windows 放宽口径，Global 14）。
-func StartCluster(t *testing.T, n int) Cluster {
+// StartCluster 启动 n 节点 JS 集群（n>=1；测试传 3，peer-remove 用例传 4——
+// v2.15 R3 移除要求立刻补位，需第 4 节点候选）。就绪判据（waitClusterReady，
+// ⑯：非旧注释的「jsz Meta.Leader 非空」）：
+//   - 路由成型：$SYS.REQ.SERVER.PING 广播应答数 == n（经 sys 用户）；
+//   - n>1 时元集群放置就绪：meta leader 自身应答视角成员满员且副本全部
+//     Current（metaClusterFormed）——紧随夹具的 NewStream 才不会偶发 10005。
+//
+// 总等待上限 30s（Windows 放宽口径，Global 14）。
+func StartCluster(t testing.TB, n int) Cluster {
 	t.Helper()
 	if n < 1 {
 		t.Fatal("cluster needs at least 1 node")
@@ -202,7 +210,7 @@ func (quietLogger) Errorf(string, ...any) {}
 
 // boot 启动一个节点并等待客户端口就绪；Shutdown 注册在 t.Cleanup（逆序由
 // Go cleanup 语义保证后进先出——后启动的先关，路由拆除更平稳）。
-func boot(t *testing.T, opts *server.Options) *server.Server {
+func boot(t testing.TB, opts *server.Options) *server.Server {
 	t.Helper()
 	srv, err := server.NewServer(opts)
 	if err != nil {
@@ -236,7 +244,7 @@ func activeServers(ctx context.Context, nc *nats.Conn, timeout time.Duration, lo
 // waitClusterReady 用客户端协议判据（与 natscli server ping / jsz 相同的
 // 面）：$SYS.REQ.SERVER.PING 广播应答数 == n（路由成型）；n>1 时元集群完整
 // 成型（metaClusterFormed）。Server.ClusterInfo() 未导出，不能作为进程内判据。
-func waitClusterReady(t *testing.T, firstURL string, n int) {
+func waitClusterReady(t testing.TB, firstURL string, n int) {
 	t.Helper()
 	sysNc := ConnectUser(t, firstURL, sysUser, sysPass)
 	deadline := time.Now().Add(30 * time.Second)
@@ -290,7 +298,7 @@ func metaClusterFormed(nc *nats.Conn, n int) bool {
 }
 
 // ConnectUser 以指定用户连接并在测试结束后关闭。
-func ConnectUser(t *testing.T, url, user, pass string) *nats.Conn {
+func ConnectUser(t testing.TB, url, user, pass string) *nats.Conn {
 	t.Helper()
 	nc, err := nats.Connect(url, nats.UserInfo(user, pass), nats.Timeout(2*time.Second), nats.MaxReconnects(-1))
 	if err != nil {

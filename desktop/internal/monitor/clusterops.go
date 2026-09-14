@@ -56,10 +56,12 @@ func (s *MonitorService) endOp(op, target string) {
 
 // runClusterOp 是全部危险操作的统一外壳：单飞登记（Global 6）→ panic 兜底
 // （Global 20，绝不带飞进程）→ 耗时统计。日志只记 op/target/code/耗时与
-// leader 名（服务器名，允许），不含凭据与载荷（§13.3）。
+// leader 名（服务器名，允许），不含凭据与载荷（§13.3）。单飞冲突路径也补
+// Warn（⑫：否则该拒绝在日志里完全不可见）——同样只记 op/target。
 func (s *MonitorService) runClusterOp(op, target string, fn func() ClusterOpResult) (res ClusterOpResult) {
 	start := time.Now()
 	if !s.beginOp(op, target) {
+		s.log.Warn("cluster op rejected: in progress", "op", op, "target", target)
 		return ClusterOpResult{CallResult: fail(CodeConflict, "operation in progress")}
 	}
 	defer s.endOp(op, target)

@@ -1,6 +1,8 @@
 package monitor
 
 import (
+	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"sync"
@@ -107,6 +109,16 @@ func TestSnapshotNoSysPermission(t *testing.T) {
 	snap := s.collectSnapshot()
 	if snap.SysAvailable || snap.SysReason == "" {
 		t.Fatalf("want degraded snapshot: %+v", snap)
+	}
+	// ㊟ degraded wire 形状：Servers 非 nil 空 slice 必须序列化为 "servers":[]
+	// 而非 null（终审 I-1 的 Go 半边——事件线发送规范形状，前端 schema 门
+	// 不再丢事件）。
+	b, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte(`"servers":null`)) {
+		t.Fatalf("degraded snapshot must marshal servers as [] not null: %s", b)
 	}
 }
 

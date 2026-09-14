@@ -17,7 +17,10 @@ import (
 // global M5 constraint). Plain nats.ErrNoResponders (errors.Is — it is a
 // sentinel) also lands on CodeServer with err text; callers decide
 // SysAvailable separately, so "system privileges" is NOT string-matched
-// here.
+// here. An api.ApiError with an empty Description falls back to ae.Error()
+// (never empty for any ApiError — jsm.go api/jetstream.go:184-192), so the
+// mapped text is never an empty string; a non-empty Description passes
+// through verbatim (Global 4).
 func ClassifyMonitorError(err error) CallResult {
 	switch {
 	case err == nil:
@@ -27,7 +30,11 @@ func ClassifyMonitorError(err error) CallResult {
 	}
 	var ae api.ApiError
 	if errors.As(err, &ae) {
-		return fail(CodeServer, ae.Description)
+		msg := ae.Description
+		if msg == "" {
+			msg = ae.Error()
+		}
+		return fail(CodeServer, msg)
 	}
 	return fail(CodeServer, err.Error())
 }

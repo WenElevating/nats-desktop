@@ -115,3 +115,31 @@ func TestClassifyMonitorError(t *testing.T) {
 		t.Fatalf("timeout folds into server: %+v", res)
 	}
 }
+
+// TestClassifyMonitorErrorApiDescriptionFallback（M5 ③）：api.ApiError 的
+// Description 为空串时回退 ae.Error()——该实现永不返回空（jsm.go
+// api/jetstream.go:184-192），故映射结果永不产生空 error 文本；非空
+// Description 原文直传（Global 4，不受 ErrCode 尾缀污染）。
+func TestClassifyMonitorErrorApiDescriptionFallback(t *testing.T) {
+	cases := []struct {
+		ae   api.ApiError
+		want string
+	}{
+		{api.ApiError{}, "unknown JetStream Error"},
+		{api.ApiError{Code: 500}, "unknown JetStream 500 Error (0)"},
+		{api.ApiError{Code: 503, ErrCode: 7}, "unknown JetStream 503 Error (7)"},
+		// 非空 Description：原文直传（无 " (errcode)" 尾缀）。
+		{api.ApiError{Code: 500, Description: "jetstream not enabled"}, "jetstream not enabled"},
+	}
+	for i, c := range cases {
+		got := ClassifyMonitorError(c.ae)
+		if got.ErrorCode != CodeServer || got.Error != c.want || got.Error == "" {
+			t.Fatalf("case %d: got %+v, want error_code=server error=%q", i, got, c.want)
+		}
+	}
+	// errors.As 包装路径同样吃到回退。
+	got := ClassifyMonitorError(errors.Join(errors.New("ctx"), api.ApiError{Code: 500}))
+	if got.ErrorCode != CodeServer || got.Error != "unknown JetStream 500 Error (0)" {
+		t.Fatalf("wrapped empty-description api error: %+v", got)
+	}
+}

@@ -39,7 +39,8 @@ type UpdateInfo struct {
 	HasUpdate bool   `json:"has_update"`
 }
 
-// Current returns the running application version ("0.1.0" during M1).
+// Current returns the running application version. Source default "0.1.0";
+// release builds override it at build time via -ldflags (see appVersion).
 func Current() string { return appVersion }
 
 // CheckTimeout returns the update-check round-trip bound so call sites

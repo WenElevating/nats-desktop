@@ -62,8 +62,9 @@ func NewMonitorService(mgr connSource, log *slog.Logger, emit func(name string, 
 	return &MonitorService{mgr: mgr, log: log, emit: emit, settingsPath: settingsPath, known: map[string]MonitorServerRow{}}
 }
 
-// interval 从设置读取轮询间隔并夹取到 2..60s（损坏/缺失文件回退默认 5s）。
-// snapshotTimeout 不走这里——固定 2s，不随设置变（§6.10）。
+// interval 从设置读取轮询间隔：值 <2（含损坏/缺失文件回退的默认口径）归
+// 5s、>60 夹到 60s、其余原样（⑱：非「clamp 到 2..60」——下界是回退默认值
+// 而非抬升到 2）。snapshotTimeout 不走这里——固定 2s，不随设置变（§6.10）。
 func (s *MonitorService) interval() time.Duration {
 	st, err := settings.Load(s.settingsPath)
 	if err != nil || st.Behavior.PollIntervalSeconds < 2 {
