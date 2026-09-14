@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A nats-desktop application
+Name=NATS Desktop
+Comment=A desktop client for NATS: contexts, messaging, JetStream, KV, object store, monitoring
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/nats-desktop.exe %u
+Exec=/usr/local/bin/nats-desktop %u
 Terminal=false
 Type=Application
-Icon=nats-desktop.exe
+Icon=nats-desktop
 Categories=Utility;
-StartupWMClass=nats-desktop.exe
+StartupWMClass=nats-desktop
 
  

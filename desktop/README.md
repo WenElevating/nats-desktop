@@ -1,6 +1,7 @@
-# NATS Desktop Client
+# NATS Desktop
 
-A Wails v3 desktop client for NATS: Go backend, React + TypeScript frontend.
+NATS Desktop is a Wails v3 desktop client for NATS: Go backend, React +
+TypeScript frontend.
 M1 milestone scope: connection management (natscli-compatible contexts),
 app shell with sidebar navigation, settings, update check, system tray, and
 single-instance behavior on Windows.

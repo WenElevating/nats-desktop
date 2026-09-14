@@ -14,9 +14,12 @@ import (
 	"time"
 )
 
-// appVersion is the running application version. M1 dev value; a build-time
-// injection (ldflags) replaces it in later milestones.
-const appVersion = "0.1.0"
+// appVersion is the running application version. Overridable at build time:
+//
+//	go build -ldflags "-X github.com/WenElevating/nats-desktop/desktop/internal/version.appVersion=1.0.0"
+//
+// (wails3 task windows:build VERSION=1.0.0 wires this in build/windows/Taskfile.yml).
+var appVersion = "0.1.0"
 
 // GitHubRepo is the repository whose releases are checked for updates
 // (TODO-001: repository rename pending).

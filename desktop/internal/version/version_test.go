@@ -86,3 +86,11 @@ func TestCheckLatestBuildsGitHubAPIURL(t *testing.T) {
 		t.Fatalf("apiURL = %q want %q", got, want)
 	}
 }
+
+// TestCurrentDefaultNotInjected: 无 ldflags 注入时 Current 返回包内默认值。
+// appVersion 必须是 var（可被 -X 注入），本测试锁定默认值不被意外改动。
+func TestCurrentDefaultNotInjected(t *testing.T) {
+	if got := Current(); got != "0.1.0" {
+		t.Fatalf("default appVersion = %q, want 0.1.0 (bump via ldflags, not source)", got)
+	}
+}

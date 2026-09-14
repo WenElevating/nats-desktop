@@ -14,6 +14,13 @@ vars:
   # Docker image for cross-compilation with CGO (used when CGO_ENABLED=1 on non-Windows)
   CROSS_IMAGE: wails-cross
 
+  # Application version injected into the production binary via -ldflags -X
+  # (runtime version.Current()). Bump together with info.version in
+  # ../config.yml — the exe's VersionInfo metadata comes from that file
+  # (dual-source invariant, M6 plan review F20). Release builds:
+  #   wails3 task windows:build VERSION=x.y.z
+  VERSION: '{{.VERSION | default "0.1.0"}}'
+
 tasks:
   build:
     summary: Builds the application for Windows
@@ -26,6 +33,7 @@ tasks:
           EXTRA_TAGS: '{{.EXTRA_TAGS}}'
           OBFUSCATED: '{{.OBFUSCATED}}'
           GARBLE_ARGS: '{{.GARBLE_ARGS}}'
+          VERSION: '{{.VERSION}}'
     vars:
       # Default to CGO_ENABLED=0 if not explicitly set
       CGO_ENABLED: '{{.CGO_ENABLED | default "0"}}'
@@ -57,7 +65,7 @@ tasks:
       - cmd: rm -f *.syso
         platforms: [linux, darwin]
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X github.com/WenElevating/nats-desktop/desktop/internal/version.appVersion={{.VERSION}}"{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: '{{.CGO_ENABLED | default "0"}}'
