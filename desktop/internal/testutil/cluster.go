@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/jsm.go/serverdata"
+	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+
+	"github.com/WenElevating/nats-desktop/desktop/internal/sysreq"
 )
 
 // ---------------------------------------------------------------------------
@@ -214,6 +216,23 @@ func boot(t *testing.T, opts *server.Options) *server.Server {
 	return srv
 }
 
+// activeServers 是 serverdata.CurrentActiveServers 的 sysreq 版：请求一次
+// $SYS.REQ.SERVER.PING，取首个应答的 Stats.ActiveServers（服务器的集群视野计数）。
+func activeServers(ctx context.Context, nc *nats.Conn, timeout time.Duration, log api.Logger) (int, error) {
+	res, err := sysreq.DoReq(ctx, nil, "$SYS.REQ.SERVER.PING", 1, nc, timeout, log)
+	if err != nil {
+		return 0, err
+	}
+	if len(res) == 0 {
+		return 0, fmt.Errorf("no ping responses")
+	}
+	var m server.ServerStatsMsg
+	if err := json.Unmarshal(res[0], &m); err != nil {
+		return 0, err
+	}
+	return m.Stats.ActiveServers, nil
+}
+
 // waitClusterReady 用客户端协议判据（与 natscli server ping / jsz 相同的
 // 面）：$SYS.REQ.SERVER.PING 广播应答数 == n（路由成型）；n>1 时元集群完整
 // 成型（metaClusterFormed）。Server.ClusterInfo() 未导出，不能作为进程内判据。
@@ -223,7 +242,7 @@ func waitClusterReady(t *testing.T, firstURL string, n int) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		got, err := serverdata.CurrentActiveServers(ctx, sysNc, 2*time.Second, quietLogger{})
+		got, err := activeServers(ctx, sysNc, 2*time.Second, quietLogger{})
 		cancel()
 		if err == nil && got == n && (n == 1 || metaClusterFormed(sysNc, n)) {
 			return
@@ -242,7 +261,7 @@ func waitClusterReady(t *testing.T, firstURL string, n int) {
 func metaClusterFormed(nc *nats.Conn, n int) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	resps, err := serverdata.DoReq(ctx, server.JszEventOptions{}, "$SYS.REQ.SERVER.PING.JSZ", n, nc, 2*time.Second, quietLogger{})
+	resps, err := sysreq.DoReq(ctx, server.JszEventOptions{}, "$SYS.REQ.SERVER.PING.JSZ", n, nc, 2*time.Second, quietLogger{})
 	if err != nil {
 		return false
 	}

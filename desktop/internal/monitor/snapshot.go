@@ -6,6 +6,8 @@ import (
 
 	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/jsm.go/serverdata"
+
+	"github.com/WenElevating/nats-desktop/desktop/internal/sysreq"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -14,11 +16,13 @@ import (
 // timeout、其后 300ms 静默即止）。Task 8 的 leader 解析复用此助手
 // （超时取调用方给定值而非快照的固定 2s）。logger 用 api.NewDiscardLogger()
 // ——DoReq 全程调 log.Debugf，nil 会 panic（勿传 nil；也不 import testutil）。
+// sysreq 是 serverdata.DoReq 的 race-free 复制适配（M6 CI -race 首跑发现
+// 上游尾读 ctr 无锁竞争；见 internal/sysreq/sysreq.go 包注释）。
 func (s *MonitorService) newLive(nc *nats.Conn, timeout time.Duration) (*serverdata.Live, error) {
 	reqFn := func(req any, subj string, waitFor int, nc *nats.Conn) ([][]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		return serverdata.DoReq(ctx, req, subj, waitFor, nc, timeout, api.NewDiscardLogger())
+		return sysreq.DoReq(ctx, req, subj, waitFor, nc, timeout, api.NewDiscardLogger())
 	}
 	return serverdata.NewLive(nc, reqFn, 0)
 }

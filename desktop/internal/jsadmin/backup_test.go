@@ -99,9 +99,18 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	if res := svc.RestoreBackup(dir, false); !res.Ok() {
 		t.Fatalf("restore: %+v", res)
 	}
-	d := svc.GetStreamDetail("BK")
-	if !d.Ok() || d.Summary.Messages != 50 {
-		t.Fatalf("restored stream content: %+v", d.Summary)
+	// 恢复是最终一致：消息重放需要时间追平（CI 慢盘 + -race 减速下首查
+	// 可能只见部分消息——M6 CI 首跑在案），轮询至 50 带死线。
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		d := svc.GetStreamDetail("BK")
+		if d.Ok() && d.Summary.Messages == 50 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("restored stream did not catch up to 50 msgs: %+v", d.Summary)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	rphases := eventPhases(events, "BK", "restore")
 	if len(rphases) == 0 || rphases[len(rphases)-1] != "complete" {

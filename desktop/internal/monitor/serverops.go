@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nats-io/jsm.go/api"
-	"github.com/nats-io/jsm.go/serverdata"
+	"github.com/WenElevating/nats-desktop/desktop/internal/sysreq"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
@@ -68,7 +68,7 @@ func (s *MonitorService) resolveServerID(name string) (string, CallResult) {
 func (s *MonitorService) directedReq(nc *nats.Conn, req any, subj string) ([][]byte, CallResult) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout())
 	defer cancel()
-	resps, err := serverdata.DoReq(ctx, req, subj, 1, nc, s.timeout(), api.NewDiscardLogger())
+	resps, err := sysreq.DoReq(ctx, req, subj, 1, nc, s.timeout(), api.NewDiscardLogger())
 	if err != nil {
 		return nil, ClassifyMonitorError(err)
 	}

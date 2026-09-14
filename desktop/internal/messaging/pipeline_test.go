@@ -357,6 +357,9 @@ func TestHeadersMatchFilters(t *testing.T) {
 }
 
 func TestHeaderMatchPerformance(t *testing.T) {
+	if raceEnabled {
+		t.Skip("perf budget not meaningful under -race instrumentation")
+	}
 	h := nats.Header{"Env": {"prod"}, "Svc": {"orders"}, "Ver": {"3"}}
 	filters := map[string]string{"Env": "prod", "Svc": "orders"}
 	start := time.Now()
