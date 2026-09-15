@@ -187,6 +187,14 @@ func main() {
 		opts.Windows.AdditionalBrowserArgs = append(opts.Windows.AdditionalBrowserArgs, "--disable-gpu")
 	}
 
+	// Remote-debugging lever (diagnostics, test-only): NATSDESKTOP_CDP_PORT=9223
+	// exposes the WebView2 Chrome DevTools Protocol on localhost for heap
+	// snapshot / JS heap analysis during soak investigations. Never set in
+	// normal operation.
+	if port := os.Getenv("NATSDESKTOP_CDP_PORT"); port != "" {
+		opts.Windows.AdditionalBrowserArgs = append(opts.Windows.AdditionalBrowserArgs, "--remote-debugging-port="+port)
+	}
+
 	app := application.New(opts)
 
 	// Single main window hosting the app shell (sidebar + page content).

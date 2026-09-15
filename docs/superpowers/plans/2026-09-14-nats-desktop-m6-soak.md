@@ -126,3 +126,17 @@ harness 用缩时档验证了全部编排路径：`-Hours 0.1`（≈6min）与 `
 - **flood 达成率**：99.8-99.9%（AboveNormal 提权后），存活至 harness 清理。
 - **产物**：samples.csv 1,027+ 行、soak.log 全程、flood.out.log、CRASH.txt（exit 3 路径真实触发）。
 - **遗留调查项（v1.1 方向）**：①logger 冻结根因（logger 包死锁分析）；②实时推送内存增长根因（渲染器堆 vs 引用滞留；T8 合流修复只消除渲染病态未止增长；批量模式 654MB/30min 稳定的对照数据在案）；③静默退出与 M4 缺陷#4 同族归因（无 WER 特征一致）。
+
+
+## §9 崩溃根因分析（2026-09-16 补充取证）
+
+**实锤归属：Windows 资源耗尽诊断（System 事件 2004，15:09-15:38 共 6 条）指认囤积者是 Go 主进程**——`nats-desktop.exe (49924) 使用了 14.3GB 虚拟内存`（同窗口渲染器仅 1.5GB、nats-server 1.0GB）。15:31-15:32 多个无关进程同时 OOM 崩溃（OSDtPDetect System.OutOfMemory / MoUsoCoreWorker APPCRASH）= 系统提交耗尽的旁证；15:31 渲染器子进程之死是受害者非元凶；15:42 宿主静默退出符合 Go runtime 提交分配失败的 fatal 特征（windowsgui 下 stderr 不可见 → 无 WER）。
+
+**根因（高置信，结构性）：wails v3 beta.20 事件管线无界队列**。Go→JS 全部事件经 `internal/mailbox.Mailbox` 投递（每 WebSocket 客户端一个），其源码注释自认 "The queue is unbounded"——`Send()` 无限 append、不阻塞、不丢弃、无背压。realtime 模式逐条 emit（1k msg/s）持续快于消费速率（drain 逐条 WS 写+前端处理）时，宿主进程 pending 队列单调增长：实测 14GB / 63M 条 ≈ 224B/条净滞留，与斜率 870MB/h 精确吻合。
+
+**修复方向（应用侧，比依赖上游更可控）**：realtime 模式 Go 侧加时间窗合流（≤100ms 或 ≤N 条聚合单次 emit，复用既有 batch 聚合器）——§6.4 语义不变（全量有序、延迟 ≤100ms 远低于 200ms P95 门），emit 速率 1k/s → ≤10/s，结构性消除积压。建议同时向上游反馈 wails mailbox 无背压问题。
+
+## §10 崩溃根因结论 + 日志冻结（2026-09-16 补充）
+
+- §9 根因经 A/B 实验完整证实（见 m6-perf §10/§10.1）：泄漏 A=宿主侧无界事件邮箱（已修 4784e27）；泄漏 B=渲染器内联 eval 拼接churn（已修 5988d7b，realtime 传输统一 100ms/500 走暂存路径，验证尾段斜率 633-970→166 MB/h @2k/s）。
+- **日志冻结（57min）为独立缺陷**：logging 包静态排查无显式死锁（rotatingWriter 互斥单层、无嵌套获取）；候选=外部删除文件致 fd 孤儿（mtime 冻结特征吻合）或写入方停摆。需专项复现探针（长跑 + 定期 prog-check 点），列 v1.1 与渲染器堆分析并列首项。§13 可诊断性在冻结窗口内失效的风险照录。
