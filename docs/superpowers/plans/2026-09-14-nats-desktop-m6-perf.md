@@ -303,3 +303,18 @@ Task 8 在 `useSessions` 落地实时推送合并修复（`session:msgs` 事件�
 原始 CSV：`desktop/bin/perf-task8-postfix.csv`（运行 A，31 采样）、`desktop/bin/perf-task8-postfix-noa11yflag.csv`（运行 B，21 采样）。
 
 UIA 冒烟同场证据：会话 chip 实时读数 970→952 msg/s、`共 N 条 / 已丢弃 N−10,000 条` 精确守恒（`scripts/uia-session-rate.ps1` 读值）；flood 发布端 2,096,091 条 @998 msg/s（99.8%）。
+
+
+## §10 修复后复测（2026-09-15 晚，commit 4784e27）
+
+**场景**：与 §7 同构——flood 1k msg/s（m6mem.x，1024B）+ 实时会话 + 应用进程树采样 40 分钟（41 样本，bin/m6fix-evidence.csv）。修复：realtime 模式 Go 侧 16ms/200 微批（4784e27），emit 速率 1k/s → ~62 events/s 封顶。
+
+**逐进程归因（新证据，3 样本 × 3min 间隔）**：
+- **Go 主进程：116.3 → 118.1 → 119.8MB，走平**——修复前同进程 800MB/h（Event 2004：17.5h 时 14.3GB）。**修复 A（邮箱囤积）验证有效**。
+- **渲染器 pid=14948：1,045 → 1,093 → 1,112MB（+67MB/6min ≈ 670MB/h）仍在增长**——独立的第二个泄漏（V8 已提交堆在持续分配下的棘轮式增长），与邮箱缺陷无关。
+
+**整树 40 分钟窗**：947 → 1,563MB，斜率 904-925MB/h（中位 1,246MB）——与修复前总斜率相当：**主进程斜率归零，但渲染器斜率（此前被主进程斜率掩盖）成为主导**。
+
+**结论修正**：17.5h 崩溃是**双泄漏叠加**——主因 A（wails 邮箱，已修并有本节证据）+ 次因 B（渲染器 V8 堆，未修）。仅修 A 不足以让 AC-025 过门：B 单独在 24h 内仍会耗尽数十 GB。B 的根因定位需要解锁桌面 + DevTools 堆快照对比（锁屏不可行），列 v1.1 首项；短期缓释不变（批量推送 654MB/30min 稳定 + 降低订阅速率 + 清空按钮）。
+
+**修复 A 的有效性证据清单**：主进程走平（本节三样本）；微批契约单测（TestPusherRealtimeLowRateSingleElement/BurstConservation：1000 条突发零丢失零乱序、批 ≤200）；全量门禁绿（Go 14 包 + vitest 309）。
