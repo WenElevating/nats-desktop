@@ -346,7 +346,7 @@ func floodPublish(t *testing.T, nc *nats.Conn, subject string, perBurst int, int
 // --- scenario functions (parameterized over server URL) -----------------------
 
 // scenarioSessionRealtime: AC-005 Go half. ~100 msg/s for 2s -> Total ~200,
-// RateMsgS > 80, realtime emits 1..200-element micro-batches (16ms), seq starts at 1
+// RateMsgS > 80, realtime emits 1..500-element aggregated batches (100ms), seq starts at 1
 // and is monotonic.
 func scenarioSessionRealtime(t *testing.T, url string) {
 	t.Helper()
@@ -385,9 +385,9 @@ func scenarioSessionRealtime(t *testing.T, url string) {
 		t.Fatalf("final Total = %d, want %d (no loss on live loopback conns)", final.Total, published)
 	}
 
-	// Realtime mode: batches carry 1..200 elements (16ms/200 micro-batch
-	// transport aggregation); seq starts at 1 and is monotonic across the
-	// flattened stream.
+	// Realtime mode: batches carry 1..500 elements (100ms/500 transport
+	// aggregation); seq starts at 1 and is monotonic across the flattened
+	// stream.
 	rec.mu.Lock()
 	var seqs []int64
 	for _, tb := range rec.batches {

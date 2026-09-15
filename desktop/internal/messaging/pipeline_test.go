@@ -64,7 +64,7 @@ func TestRingSnapshotOrderEdge(t *testing.T) {
 	}
 }
 
-// --- pusher: realtime (16ms/200 micro-batches, M6 crash fix) ---------------
+// --- pusher: realtime (100ms/500 transport aggregation, M6 crash fix) ------
 
 // Low rate: a lone message goes out as a single-element array within the
 // 16ms window (plus scheduler ε) — the pre-fix wire shape is preserved.
@@ -97,8 +97,8 @@ func TestPusherRealtimeLowRateSingleElement(t *testing.T) {
 }
 
 // Burst: conservation (all messages delivered exactly once, in order), each
-// micro-batch ≤200, and the timer flushes the tail — the contract that keeps
-// the wails event mailbox from retaining the backlog (M6 crash fix).
+// batch ≤500, and the timer flushes the tail — the contract that keeps the
+// wails event pipeline from retaining the backlog (M6 crash fix).
 func TestPusherRealtimeBurstConservation(t *testing.T) {
 	var mu sync.Mutex
 	var got []int64

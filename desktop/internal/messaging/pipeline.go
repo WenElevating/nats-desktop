@@ -116,26 +116,29 @@ const (
 	batchMaxMsgs = 500
 	// batchInterval is the batch-mode timer period (spec §6.4: 100ms).
 	batchInterval = 100 * time.Millisecond
-	// realtimeMaxMsgs caps a realtime micro-batch (M6 crash fix). Realtime
-	// used to emit one wails event per message; at sustained rates the wails
-	// v3 beta.20 event mailbox (unbounded by design) retained the backlog in
-	// the host process — 14GB / crash in the 24h soak (m6-soak §8/§9).
-	// Micro-batching caps the emit rate at ~62 events/s per session.
-	realtimeMaxMsgs = 200
-	// realtimeInterval is the realtime timer period. Added delivery latency
-	// is 0-16ms, an order of magnitude under the §12 P95 gate (200ms).
-	realtimeInterval = 16 * time.Millisecond
+	// realtimeMaxMsgs caps a realtime micro-batch. Realtime used to emit one
+	// wails event per message; the wails v3 beta.20 event pipeline retains
+	// small spliced-eval events in the renderer (committed-heap ratchet,
+	// ~670MB/h at 1k msg/s — m6-perf §11) and the host-side event mailbox is
+	// unbounded (14GB — m6-soak §8). Transport aggregation at the batch
+	// parameters routes events through the >8KB parked-payload HTTP path,
+	// which the renderer holds at a flat plateau (m6-perf §11: 410-455MB
+	// sawtooth over 1.35M messages). Empirically chosen identical to batch.
+	realtimeMaxMsgs = batchMaxMsgs
+	// realtimeInterval: see realtimeMaxMsgs. Added delivery latency is
+	// 0-100ms, under the §12 P95 gate (200ms).
+	realtimeInterval = batchInterval
 )
 
 // pusher coalesces/emits MsgOut batches toward the frontend according to
 // the session's PushMode (spec §6.4):
 //
-//   - realtime (default): messages are micro-batched — buffered until 200
-//     accumulate or 16ms elapses, whichever comes first. At low rates each
-//     message still goes out as a single-element array (plus ≤16ms delay);
-//     at sustained rates the emit rate is capped at ~62 events/s, which
-//     keeps the wails event mailbox from retaining the backlog (M6 crash
-//     fix; delivery is still lossless and in order).
+//   - realtime (default): messages are transport-aggregated with the same
+//     100ms/500 parameters as batch mode. Both modes route >8KB events
+//     through the wails parked-payload HTTP path, which the renderer holds
+//     flat; per-message events (≤8KB inline eval) ratcheted renderer
+//     memory ~670MB/h at sustained rates (M6 crash fix; delivery stays
+//     lossless and in order, added latency ≤100ms).
 //   - batch: messages are buffered until 500 accumulate or 100ms elapses,
 //     whichever comes first; the whole buffer is then emitted as one
 //     batch. Both modes run an internal timer goroutine, which Stop()
