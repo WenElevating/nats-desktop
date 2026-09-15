@@ -291,14 +291,14 @@ func TestServiceFullChainLocalServer(t *testing.T) {
 		t.Fatalf("Publish: %+v", res)
 	}
 	// Delivery wait is infrastructure tolerance (assertion is the message
-	// landed, not when): 10s headroom per the M6 T1 flake list.
+	// landed, not when): 10s headroom per the M6 T1 flake list. The emit
+	// itself lands within the 16ms realtime micro-batch window (M6 crash
+	// fix), so poll for it instead of asserting synchronously after Total.
 	st = waitSessionTotal(t, svc.Sessions, st.ID, 1, 10*time.Second)
 	if st.BufferUsed != 1 {
 		t.Fatalf("BufferUsed = %d, want 1", st.BufferUsed)
 	}
-	if n := rec.msgCount(st.ID); n < 1 {
-		t.Fatalf("session:msgs emitted %d times, want >= 1", n)
-	}
+	waitEmitted(t, rec, st.ID, 1, 10*time.Second)
 
 	// Publish (JetStream) returns the PubAck.
 	nc := connect(t, localServerURL)

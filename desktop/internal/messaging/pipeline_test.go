@@ -64,9 +64,11 @@ func TestRingSnapshotOrderEdge(t *testing.T) {
 	}
 }
 
-// --- pusher: realtime -----------------------------------------------------
+// --- pusher: realtime (16ms/200 micro-batches, M6 crash fix) ---------------
 
-func TestPusherRealtimeEmitsImmediately(t *testing.T) {
+// Low rate: a lone message goes out as a single-element array within the
+// 16ms window (plus scheduler ε) — the pre-fix wire shape is preserved.
+func TestPusherRealtimeLowRateSingleElement(t *testing.T) {
 	var mu sync.Mutex
 	var batches [][]MsgOut
 	p := newPusher(PushRealtime, func(b []MsgOut) {
@@ -76,14 +78,72 @@ func TestPusherRealtimeEmitsImmediately(t *testing.T) {
 	})
 	defer p.Stop()
 	p.Add(MsgOut{Seq: 1})
-	p.Add(MsgOut{Seq: 2})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(batches)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(batches) != 2 || len(batches[0]) != 1 || batches[0][0].Seq != 1 {
-		t.Fatalf("realtime must emit per-message single-element batches: %+v", batches)
+	if len(batches) != 1 || len(batches[0]) != 1 || batches[0][0].Seq != 1 {
+		t.Fatalf("low-rate realtime must emit one single-element batch: %+v", batches)
 	}
-	if len(batches[1]) != 1 || batches[1][0].Seq != 2 {
-		t.Fatalf("realtime second batch wrong: %+v", batches[1])
+}
+
+// Burst: conservation (all messages delivered exactly once, in order), each
+// micro-batch ≤200, and the timer flushes the tail — the contract that keeps
+// the wails event mailbox from retaining the backlog (M6 crash fix).
+func TestPusherRealtimeBurstConservation(t *testing.T) {
+	var mu sync.Mutex
+	var got []int64
+	var batchMax int
+	p := newPusher(PushRealtime, func(b []MsgOut) {
+		mu.Lock()
+		if len(b) > batchMax {
+			batchMax = len(b)
+		}
+		for _, m := range b {
+			got = append(got, m.Seq)
+		}
+		mu.Unlock()
+	})
+	const n = 1000
+	for i := 1; i <= n; i++ {
+		p.Add(MsgOut{Seq: int64(i)})
+	}
+	// 1000 msgs at a 200 threshold → ≥5 threshold flushes synchronously; the
+	// tail flushes within one 16ms tick + ε.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := len(got) >= n
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != n {
+		t.Fatalf("conservation: got %d msgs, want %d", len(got), n)
+	}
+	for i, seq := range got {
+		if seq != int64(i+1) {
+			t.Fatalf("order broken at %d: got seq %d", i, seq)
+		}
+	}
+	if batchMax > realtimeMaxMsgs {
+		t.Fatalf("batch size %d exceeds cap %d", batchMax, realtimeMaxMsgs)
+	}
+	if n > 100 && batchMax <= 1 {
+		t.Fatalf("burst produced only single-element batches — coalescing inactive")
 	}
 }
 

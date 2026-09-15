@@ -116,22 +116,35 @@ const (
 	batchMaxMsgs = 500
 	// batchInterval is the batch-mode timer period (spec §6.4: 100ms).
 	batchInterval = 100 * time.Millisecond
+	// realtimeMaxMsgs caps a realtime micro-batch (M6 crash fix). Realtime
+	// used to emit one wails event per message; at sustained rates the wails
+	// v3 beta.20 event mailbox (unbounded by design) retained the backlog in
+	// the host process — 14GB / crash in the 24h soak (m6-soak §8/§9).
+	// Micro-batching caps the emit rate at ~62 events/s per session.
+	realtimeMaxMsgs = 200
+	// realtimeInterval is the realtime timer period. Added delivery latency
+	// is 0-16ms, an order of magnitude under the §12 P95 gate (200ms).
+	realtimeInterval = 16 * time.Millisecond
 )
 
 // pusher coalesces/emits MsgOut batches toward the frontend according to
 // the session's PushMode (spec §6.4):
 //
-//   - realtime (default): every Add emits a single-element batch
-//     immediately.
+//   - realtime (default): messages are micro-batched — buffered until 200
+//     accumulate or 16ms elapses, whichever comes first. At low rates each
+//     message still goes out as a single-element array (plus ≤16ms delay);
+//     at sustained rates the emit rate is capped at ~62 events/s, which
+//     keeps the wails event mailbox from retaining the backlog (M6 crash
+//     fix; delivery is still lossless and in order).
 //   - batch: messages are buffered until 500 accumulate or 100ms elapses,
 //     whichever comes first; the whole buffer is then emitted as one
-//     batch. Batch mode runs an internal timer goroutine, which Stop()
+//     batch. Both modes run an internal timer goroutine, which Stop()
 //     fully terminates (no leak).
 //
 // Emit contract (re-entrancy): emit is always invoked WITHOUT p.mu held,
 // so emit may safely call Add/Flush. It must NOT call Stop synchronously
 // from inside emit — Stop waits for the timer goroutine, which is the
-// caller of emit in batch mode, and would deadlock. Add after Stop is a
+// caller of emit in both modes, and would deadlock. Add after Stop is a
 // no-op (buffered-but-unsent messages are discarded by Stop; call Flush
 // before Stop if they must be delivered).
 type pusher struct {
@@ -147,8 +160,8 @@ type pusher struct {
 	done     chan struct{} // closed by the timer goroutine on exit
 }
 
-// newPusher creates a pusher. In batch mode it starts the internal timer
-// goroutine; in realtime mode there is no goroutine.
+// newPusher creates a pusher. Both modes start the internal timer goroutine
+// (realtime flushes 16ms micro-batches; batch flushes 100ms batches).
 func newPusher(mode PushMode, emit func(batch []MsgOut)) *pusher {
 	p := &pusher{
 		mode:   mode,
@@ -156,19 +169,19 @@ func newPusher(mode PushMode, emit func(batch []MsgOut)) *pusher {
 		stopCh: make(chan struct{}),
 		done:   make(chan struct{}),
 	}
-	if mode == PushBatch {
-		go p.run()
-	} else {
-		close(p.done) // realtime: nothing to wait for in Stop
-	}
+	go p.run()
 	return p
 }
 
-// run is the batch-mode timer goroutine: every 100ms it emits whatever is
-// buffered. It owns no state outside p.mu.
+// run is the timer goroutine: every mode-specific interval it emits whatever
+// is buffered. It owns no state outside p.mu.
 func (p *pusher) run() {
 	defer close(p.done)
-	ticker := time.NewTicker(batchInterval)
+	interval := batchInterval
+	if p.mode == PushRealtime {
+		interval = realtimeInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -188,8 +201,8 @@ func (p *pusher) run() {
 	}
 }
 
-// Add enqueues m. Realtime mode emits [m] immediately; batch mode buffers
-// and emits when the buffer reaches batchMaxMsgs. After Stop, Add is a
+// Add enqueues m. Both modes buffer and emit when the mode's threshold is
+// reached or the timer fires, whichever comes first. After Stop, Add is a
 // no-op.
 func (p *pusher) Add(m MsgOut) {
 	p.mu.Lock()
@@ -197,24 +210,22 @@ func (p *pusher) Add(m MsgOut) {
 		p.mu.Unlock()
 		return
 	}
-	if p.mode != PushBatch {
-		p.mu.Unlock()
-		p.emit([]MsgOut{m}) // realtime: single-element batch
-		return
-	}
 	p.buf = append(p.buf, m)
-	if len(p.buf) < batchMaxMsgs {
+	max := batchMaxMsgs
+	if p.mode == PushRealtime {
+		max = realtimeMaxMsgs
+	}
+	if len(p.buf) < max {
 		p.mu.Unlock()
 		return
 	}
 	b := p.buf
 	p.buf = nil
 	p.mu.Unlock()
-	p.emit(b) // 500 threshold reached: flush outside the lock
+	p.emit(b) // threshold reached: flush outside the lock
 }
 
-// Flush emits the current partial batch (if any). Realtime mode buffers
-// nothing, so Flush is a no-op there. Safe after Stop (no-op).
+// Flush emits the current partial batch (if any). Safe after Stop (no-op).
 func (p *pusher) Flush() {
 	p.mu.Lock()
 	if p.stopped || len(p.buf) == 0 {
