@@ -196,6 +196,7 @@ export function ConnectionsPage({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [showToken, setShowToken] = useState(false);
 
   // Copy dialog state.
   const [copySrc, setCopySrc] = useState<string | null>(null);
@@ -251,6 +252,7 @@ export function ConnectionsPage({
     setErrors({});
     setTestResult(null);
     setShowPassword(false);
+    setShowToken(false);
     modTimeRef.current = 0; // creates never carry a known mtime
     editTarget.current = null;
     setFormOpen(true);
@@ -273,6 +275,7 @@ export function ConnectionsPage({
     setErrors({});
     setTestResult(null);
     setShowPassword(false);
+    setShowToken(false);
     setFormOpen(true);
     GetContextForm(c.name)
       .then((res) => {
@@ -595,12 +598,30 @@ export function ConnectionsPage({
             )}
             {draft.authType === "token" && (
               <Field id="ctx-token" label={t("connections.token")}>
-                <Input
-                  id="ctx-token"
-                  value={draft.token ?? ""}
-                  autoComplete="off"
-                  onChange={(e) => patch({ token: e.target.value })}
-                />
+                <div className="relative">
+                  <Input
+                    id="ctx-token"
+                    className="pr-9"
+                    type={showToken ? "text" : "password"}
+                    value={draft.token ?? ""}
+                    autoComplete="off"
+                    onChange={(e) => patch({ token: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    aria-label={t(showToken ? "connections.hideToken" : "connections.showToken", {
+                      defaultValue: showToken ? "Hide token" : "Show token",
+                    })}
+                    onClick={() => setShowToken((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--fg-muted)] hover:text-foreground"
+                  >
+                    {showToken ? (
+                      <EyeOff size={14} strokeWidth={1.75} />
+                    ) : (
+                      <Eye size={14} strokeWidth={1.75} />
+                    )}
+                  </button>
+                </div>
               </Field>
             )}
             {draft.authType === "creds" && (

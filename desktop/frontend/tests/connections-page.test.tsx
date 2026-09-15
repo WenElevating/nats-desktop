@@ -187,6 +187,27 @@ it("masks the password until the eye toggle reveals it", async () => {
   expect((screen.getByLabelText("Password") as HTMLInputElement).type).toBe("text");
 });
 
+// AC-030 (matrix F-1): the context token is a credential like the password
+// and must default to masked display. Falsifies if the token input ever
+// renders as plaintext type="text".
+it("masks the token until the eye toggle reveals it (AC-030)", async () => {
+  render(<ConnectionsPage />);
+  fireEvent.click(screen.getByRole("button", { name: "New context" }));
+  await screen.findByLabelText("Name");
+  fireEvent.click(screen.getByRole("radio", { name: "Token" }));
+
+  // Both the token auth radio and the token field are labelled "Token";
+  // pick the field by its stable ctx-token id.
+  const tokenInput = () =>
+    screen.getAllByLabelText("Token").find((el) => el.id === "ctx-token") as HTMLInputElement;
+  await userEvent.type(tokenInput(), "s3cr3t-token");
+
+  expect(tokenInput().type).toBe("password");
+  expect(tokenInput().value).toBe("s3cr3t-token");
+  fireEvent.click(screen.getByRole("button", { name: "Show token" }));
+  expect(tokenInput().type).toBe("text");
+});
+
 it("connect action calls the Connect binding", async () => {
   render(<ConnectionsPage />);
   await screen.findByText("dev");
