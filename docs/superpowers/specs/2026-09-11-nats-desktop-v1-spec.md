@@ -8,13 +8,13 @@
 
 | 项目 | 内容 |
 |---|---|
-| 项目名称 | NATS 桌面客户端（工作名 nats-desktop；正式项目名见 TODO-001） |
+| 项目名称 | NATS 桌面客户端（正式项目名 NATS Desktop，仓库 WenElevating/nats-desktop；TODO-001 已裁定） |
 | 功能名称 | v1.0 桌面客户端（连接管理、消息调试、JetStream、KV、对象存储、服务器监控） |
-| Spec 版本 | v1.1 |
+| Spec 版本 | v1.2 |
 | 创建人 | WenMingMing |
 | 创建日期 | 2026-09-11 |
-| 最后修改 | 2026-09-11 |
-| 状态 | Draft |
+| 最后修改 | 2026-09-15 |
+| 状态 | v1.0 验收完成（有条件通过，见 §25） |
 
 ### 版本记录
 
@@ -22,6 +22,7 @@
 |---|---|---|---|
 | v1.0 | 2026-09-11 | WenMingMing | 初始版本（基于 2026-09-11 设计评审结论） |
 | v1.1 | 2026-09-11 | WenMingMing | 订阅会话推送模式改为可选：默认实时（逐条推送、不节流），批量（100ms/500 条）作为会话级与全局可选项；同步更新 §6.4/§7.1.3/§8.5.1/§11/§12/§15/AC-005/AC-006/AC-007 |
+| v1.2 | 2026-09-15 | WenMingMing | M6 验收回填：§19.2 实测结果列逐行回填（含常驻内存与稳定运行两项 FAIL 如实记录）；§24 TODO-001~005 全部 Resolved；§25 验收结论（有条件通过，附已知限制与缓释路径） |
 
 ---
 
@@ -1527,17 +1528,19 @@ Attempt=2
 
 ## 19.2 性能验收
 
+> 实测结果（2026-09-14/15 M6 双档实测回填；数据来源 `docs/superpowers/plans/2026-09-14-nats-desktop-m6-perf.md`（下称 m6-perf）与 `2026-09-14-nats-desktop-m6-soak.md` §8（下称 m6-soak）。低配列为「模拟」口径（2 核 CPU 亲和 + GPU 禁用，非真机）；PENDING-MANUAL 项均附解锁桌面后的补测路径，不冒充已测。
+
 | 指标 | 验收标准（高配 / 低配） | 实测结果 |
 |---|---:|---|
-| 冷启动 | ≤2s / ≤4s | |
-| 常驻内存 | ≤300MB / ≤400MB | |
-| 订阅吞吐 | 5,000 / 1,000 msg/s 丢帧<5% | |
-| 列表加载（500 streams） | ≤500ms / ≤1,500ms | |
-| 大列表滚动 | ≥60fps / ≥30fps | |
-| 操作反馈 | ≤100ms / ≤100ms | |
-| 安装包 | ≤30MB | |
-| 会话消息上屏延迟 P95 | ≤200ms / ≤200ms | |
-| 稳定运行 | ≥24h，内存增长 ≤10% | |
+| 冷启动 | ≤2s / ≤4s | 高配 ready **155ms**（frontend 618ms，5 轮中位）/ 低配模拟 **203ms** → **PASS**（余量 >3×/~20×；m6-perf §1.1/§2.1） |
+| 常驻内存 | ≤300MB / ≤400MB | 空载 231.4–245.2MB / 174.7–177.6MB **PASS**；**典型负载 30min 实时推送 FAIL**——稳态 1,294–1,551MB（合流修复后中位 1,293.7MB，renderer 面为主，V8 已提交堆不归还 OS）；批量推送模式 653.8MB（-52% 缓解杠杆，仍高于门禁）；24h 长稳同场景线性增长至 16,018MB 后崩溃（~870MB/h）→ **FAIL**（m6-perf §1.5/§2.3/§7；m6-soak §8；结论与缓释见 §25） |
+| 订阅吞吐 | 5,000 / 1,000 msg/s 丢帧<5% | 5k 持续腿均值 4,973 msg/s（**99.5%**）+ 1k×30min 会话层 **1:1 精确保全**（1,797,032 发 = 1,797,032 收；「已丢弃」恒等于总量−缓冲 10,000，按设计丢最旧精确计数）→ **PASS**（丢帧率 UI 录屏判读 PENDING-MANUAL；m6-perf §1.4/§1.5） |
+| 列表加载（500 streams） | ≤500ms / ≤1,500ms | 10k 流数据集在位下**前 500 取数 34–37ms**（余量 13–22×；应用 5s 默认超时不触）→ **PASS**（m6-perf §6.2） |
+| 大列表滚动 | ≥60fps / ≥30fps | **PENDING-MANUAL**（帧级判读需 DevTools/录屏，锁屏不可用；自动化近似在案：10k 行冷挂载 mean 15.9ms、排序切换 9.9ms（vitest bench）、10k 列表 UIA 首帧 894–1,166ms 虚拟化仅渲染视口行；m6-perf §1.7/§6.5/§S3-1） |
+| 操作反馈 | ≤100ms / ≤100ms | **PENDING-MANUAL**（帧级；UIA 自动化上限估计 **80ms** 在案——暂停按钮到「已暂停」文本出现，含 COM 往返；m6-perf §1.6/§S3-2） |
+| 安装包 | ≤30MB | 安装包 **9.14MB** / 便携 zip **7.46MB** → **PASS**（`desktop/bin/dist/SHA256SUMS.txt` 在案；m6-test-report §2） |
+| 会话消息上屏延迟 P95 | ≤200ms / ≤200ms | 实时与批量双模式均 **PENDING-MANUAL**（帧级到达时刻需录屏；自动化等价证据在案：会话层守恒 1:1、UIA 速率读数与发布端一致、批量同批时间戳语义有测试钉住；m6-perf §1.6/§S3-3/4） |
+| 稳定运行 | ≥24h，内存增长 ≤10% | **FAIL**——实跑 17.5h 崩溃：进程树 private 157MB → 16,018MB 线性增长（~870MB/h 无平台期），15:31 一个 WebView2 子进程死亡 → UI 失效 → 15:42 宿主静默退出（无 WER）；应用文件日志开跑 57min 后静默冻结（§13 可诊断性契约破坏）；17.5h 前功能正常（nav 循环、flood 99.8–99.9%）。详见 m6-soak §8 回填；v1.1 修复方向见 §25 |
 
 ---
 
@@ -1668,27 +1671,39 @@ Attempt=2
 
 | 编号 | 问题 | 负责人 | 截止时间 | 状态 |
 |---|---|---|---|---|
-| TODO-001 | 正式项目名与仓库命名（建议：natdesk 或 natsdesk；GitHub 上 nats-desktop 已被 thedataflows 占用，需检索确认新名无占用） | WenMingMing | M1 结束前 | Pending |
-| TODO-002 | 是否购买 Windows 代码签名证书（影响 SmartScreen 体验与发布成本） | WenMingMing | M6 前 | Pending |
-| TODO-003 | 崩溃报告是否配置 Sentry DSN（开源发布用；不配置则仅本地日志） | WenMingMing | M6 前 | Pending |
-| TODO-004 | macOS/Linux best-effort 构建是否随 v1.0 一并发布（当前决策：仅 Windows 正式验收） | WenMingMing | M6 前 | Pending |
-| TODO-005 | context 目录在 Windows 的最终路径确认（跟随 natscontext 库行为：`%LOCALAPPDATA%/nats/context`；需在 M1 与 CLI 实测互操作后锁定文档） | WenMingMing | M1 期间 | Pending |
+| TODO-001 | 正式项目名与仓库命名（建议：natdesk 或 natsdesk；GitHub 上 nats-desktop 已被 thedataflows 占用，需检索确认新名无占用） | WenMingMing | M1 结束前 | **Resolved**（M6 T1 落地）：展示名 **NATS Desktop**（go module / 仓库名不变）；GitHub `nats-desktop` 名被占→仓库定名 **WenElevating/nats-desktop**。产品元数据（info.json / NSIS / manifest / `ready version=` 日志三源一致）已实装 |
+| TODO-002 | 是否购买 Windows 代码签名证书（影响 SmartScreen 体验与发布成本） | WenMingMing | M6 前 | **Resolved**：**不购证**。README 写明 SmartScreen 未签名警告说明 + 附 SHA256 校验指引（`desktop/README.md` §Release）；便携包内 README-portable.txt 同步说明 |
+| TODO-003 | 崩溃报告是否配置 Sentry DSN（开源发布用；不配置则仅本地日志） | WenMingMing | M6 前 | **Resolved**：**不配置**，仅本地日志（`%APPDATA%\nats-desktop\logs\`，§13 契约；v1.0 立场不变） |
+| TODO-004 | macOS/Linux best-effort 构建是否随 v1.0 一并发布（当前决策：仅 Windows 正式验收） | WenMingMing | M6 前 | **Resolved**：**仅 Windows 正式验收**（darwin/ios/linux 构建资产已随元数据再生成保留，不发布） |
+| TODO-005 | context 目录在 Windows 的最终路径确认（跟随 natscontext 库行为：`%LOCALAPPDATA%/nats/context`；需在 M1 与 CLI 实测互操作后锁定文档） | WenMingMing | M1 期间 | **Resolved**（M1 互操作实测闭环）：AC-003 双向互通 LIVE-PASS（CLI 建→应用可见可用；应用建→CLI 列出并可连接，rtt 315µs）+ `TestInteropRoundTrip` 回归在案；路径按 natscontext 库约定（§7.1.1，受 XDG 变量影响场景按库行为） |
 
 ---
 
 ## 25. 验收结论
 
+（2026-09-15 M6 验收回填；逐项证据见 `docs/superpowers/plans/2026-09-14-nats-desktop-m6-acceptance.md` 与 `2026-09-14-nats-desktop-m6-test-report.md`，手测核销见 `2026-09-14-nats-desktop-m6-manual-matrix.md`）
+
 | 项目 | 结果 |
 |---|---|
-| 功能 | 待验收 |
-| 性能 | 待验收 |
-| 稳定性 | 待验收 |
-| 兼容性 | 待验收 |
-| 安全 | 待验收 |
+| 功能 | **达标**——§19.1 AC-001~030 中 27 项以自动化/自动化+实测证据达标；AC-022 键盘全路径复验与 AC-026 截图基线 32 张为 PENDING-MANUAL（脚本/步骤就绪，待解锁桌面），AC-027 显式腿需远端先发布 release（自动化逻辑测试已覆盖，静默腿实测 404 语义符合）。手测矩阵 40 行：16 EXECUTED / 24 LIVE-待办（待解锁桌面用户走查） |
+| 性能 | **双档部分达标**——冷启动 155/203ms、列表加载 34–37ms、订阅吞吐 99.5%+1:1 保全、安装包 9.14MB 均 PASS；**常驻内存典型负载 FAIL**（实时推送稳态 1.3GB 量级 vs 门禁 300MB；批量模式 654MB 缓解在案）；滚动帧率/操作反馈帧级/上屏 P95 为 PENDING-MANUAL（§19.2） |
+| 稳定性 | **FAIL（如实记录）**——24h 长稳 17.5h 崩溃（AC-025）：内存线性增长 157MB→16,018MB（~870MB/h）、WebView2 子进程先死、宿主静默退出无 WER、应用日志 57min 处冻结。17.5h 内功能与导航正常；短档验证跑（6min/30min）全绿 |
+| 兼容性 | **达标**——context 与 natscli 双向互操作（AC-003，M1 实测+回归）；协议版本 nats-server 2.15.0-preview.1/2.10.x 实测在案（M5 集群/M6 工具链）；设置文件向后兼容设计未破坏 |
+| 安全 | **达标（附一项已修复缺陷）**——AC-030 三腿：源码扫 52 文件 0 命中、日志样本 0 凭证明文、设置页掩码复验发现 token 输入框明文缺陷 F-1 → 已修复（`99f29c6`，ctx-token 默认掩码+切换按钮+测试）；RedactContext 日志脱敏契约在案 |
 
 ### 最终结论
 
-> 待验收
+> **有条件通过（附已知限制）**——发布决策显式留给维护者。
+>
+> **达标面**：功能面（§4.1 全表交付完毕，M1–M6 六个里程碑全部任务闭环）、质量门（Go 全量套件全绿 + vitest 309/309 + tsc/eslint/build 净 + CI 四 job 全绿 + -race 首跑真发现并已修）、打包发布线（NSIS 安装包 9.14MB + 便携 zip 7.46MB + SHA256SUMS + 版本三源一致 + 安装/卸载冒烟全过）全部达标；安全性终扫达标（缺陷 F-1 已修复）。
+>
+> **两项 FAIL 如实并列（不粉饰）**：
+> 1. **持续高速实时推送场景的内存增长**——典型负载 30min 稳态 ~1.3GB（门禁 300MB），24h 长稳同场景线性增长至 16GB 后崩溃。缓释路径在案：①设置开启 `session_push_batching` 批量推送（653.8MB，-52%，30min 稳定）；②降低订阅速率；③会话「清空」按钮即时释放列表面。用户文档应在高频订阅场景提示开启批量模式。
+> 2. **24h 长稳崩溃（AC-025 FAIL）**——三层缺陷链（日志 57min 冻结 → 内存线性增长 → 宿主静默退出无 WER）。v1.1 修复方向已登记：渲染器堆滞留分析（T8 合流修复只消除逐事件 setState 病理，未止增长）+ logger 冻结排查（logger 包死锁/写入 goroutine 消失）；静默退出与 M4 缺陷#4 同族归因（无 WER 特征一致）。
+>
+> **限制与未尽项**：手测矩阵 24 行 LIVE-待办需解锁桌面用户走查（精确步骤已备，含 AC-022 键盘全路径、32 张截图基线、AC-005/026 上屏 P95 录屏腿等）；低配档为模拟口径（2 核亲和+GPU 禁用）；安装包未签名（SmartScreen 警告，README+SHA256 缓解，TODO-002 裁决不购证）。上述 FAIL 项不影响低频巡检/管理场景（连接管理、JetStream 管理、KV/对象存储、监控）的正常使用——该场景实测常驻 231–267MB。
+>
+> 维护者依据上述两面自行裁量发布时机；若首发，建议 Release 标注已知限制（高频实时订阅场景内存）并在 v1.1 修复后撤换。
 
 ---
 

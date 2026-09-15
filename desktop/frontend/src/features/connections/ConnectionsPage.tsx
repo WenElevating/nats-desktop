@@ -609,9 +609,7 @@ export function ConnectionsPage({
                   />
                   <button
                     type="button"
-                    aria-label={t(showToken ? "connections.hideToken" : "connections.showToken", {
-                      defaultValue: showToken ? "Hide token" : "Show token",
-                    })}
+                    aria-label={t(showToken ? "connections.hideToken" : "connections.showToken")}
                     onClick={() => setShowToken((v) => !v)}
                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--fg-muted)] hover:text-foreground"
                   >
