@@ -1,4 +1,4 @@
-param([string]$ProcName = "nats-desktop", [string]$OutCsv, [int]$IntervalSec = 60, [int]$DurationMin = 0)
+param([string]$ProcName = "nats-desktop", [string]$OutCsv, [int]$IntervalSec = 60, [int]$DurationMin = 0, [int]$MaxWaitSec = 180)
 # Memory sampler (M6 Task 5, reused by Tasks 6/7). 口径 (M2 acceptance §4.3):
 # private working set summed over the MAIN process AND all its WebView2 children
 # (msedgewebview2.exe whose CommandLine references this app's WebView2 user-data
@@ -26,9 +26,16 @@ if (-not $OutCsv) { $OutCsv = Join-Path $env:TEMP ("perf-" + (Get-Date -Format y
 # once private_mb crossed 1000. "0.0" has no group separator in any culture.
 $deadline = if ($DurationMin -gt 0) { (Get-Date).AddMinutes($DurationMin) } else { $null }
 "timestamp,private_mb,ws_mb,cpu_s,handles,threads" | Out-File $OutCsv -Encoding utf8
+# soak.ps1 starts this sampler BEFORE the app; the first check would race the
+# launch and silently produce a header-only CSV (lost on run B / leg E). Wait
+# bounded for the process to appear before the sample loop.
+$waitedSec = 0
 while ($true) {
   $main = Get-Process -Name $ProcName -ErrorAction SilentlyContinue
-  if (-not $main) { break }
+  if (-not $main) {
+    if ($waitedSec -lt $MaxWaitSec) { Start-Sleep -Seconds 5; $waitedSec += 5; continue }
+    break
+  }
   # WebView2 children of THIS app: user-data dir keyed on the exe name (wails default).
   $children = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" |
     Where-Object { $_.CommandLine -match [regex]::Escape($ProcName) }
