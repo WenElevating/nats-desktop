@@ -331,3 +331,23 @@ UIA 冒烟同场证据：会话 chip 实时读数 970→952 msg/s、`共 N 条 /
 - 同窗口 Go 主进程 103.8-104.1MB 走平（修复 A 持续有效）。
 
 **遗留**：尾段 166MB/h 是否完全归零需 24h 尺度判定（见复跑长稳）；如为 V8/PartitionAlloc 水位漂移则预期出现平台期。
+
+## §12 残余泄漏 B 归因·第二阶段（2026-09-17 凌晨，金标准复跑后）
+
+**基线**（m6-soak §11）：修复后构建 24h 满窗不崩溃；树内存残余 ~108MB/h 线性棘轮，逐进程实锤归属 WebView2 browser 进程（48140，终值 2,777MB）。
+
+**A/B 定模式无关性**（同 exe = Sep 15 23:17 修复版、同载 1k msg/s×1024B、各 1h、每进程采样 `bin/ab-leakB-batch/ppsample-batch.csv`）：
+- **batch 模式同样棘轮：wv_sum +111.5MB/h、browser 进程 +109.8MB/h、Go 主进程 +5.7MB/h（平稳）**——与 24h realtime 复跑的 ~108MB/h 无差异。
+- 结论：**残余泄漏与推送模式无关，位于两模式共享的 Go→JS 大事件传输通道**（500KB 级聚合事件 >8KB 阈值 → wails parked-payload HTTP/URL-scheme task 路径，browser 进程为必经节点）。
+- batch 1h 内 UIA 导航 56 循环全 ok（短窗无 UIA 劣化，长窗劣化仅在 24h 尺度显化）。
+
+**已排查并排除**：
+1. HTTP 响应缓存：payload 响应已带 `Cache-Control: no-store`（wails `application.go` serveEventPayload）。
+2. Go 侧 payload 存储：`take()` 取走即删 + 30s TTL + 7.5s sweep + 64MB 全局上限——主进程 24h/1h 双跑平稳与之吻合。
+3. 上游：wails #4587（eval 泄漏）经 PR #5930 落地为现行 parked 机制；issue/PR 无 WebView2 browser 进程专项跟进——本残余属上游未charted区域。
+
+**工作假设**：滞留在 WebView2 拦截请求（URL-scheme task / WebResourceRequested）机器内部，量级 ~3.2KB/事件（110MB/h ÷ 36k 事件/h），约合每字节的 0.6%——第三方层，应用代码不可达。
+
+**判别实验 Run C**（20 msg/s 低速，聚合批 ~2 条 ≈400B < 8KB → 走内联 eval、绕开 parked 通道）：browser 若平坦 → parked 通道滞留坐实，修复方向 = 应用侧自建 WebSocket 旁路（v1.1 结构性方案）或上报上游 / 缩批至 8KB 内（代价：33 evals/s，需复验内联路径渲染器棘轮）；browser 仍 ~110MB/h → 每事件节奏型泄漏，与路径无关，另寻攻击面。
+
+**缓解现状（如发布）**：110MB/h → 24h +2.6GB，运行多日有长压风险（首崩案例 14.3GB 才致命；该残余无崩溃观察至 3.2GB/24h），但 ≤10% 门禁客观 FAIL。短周期会话（<4h）内增速无感（<450MB）。
