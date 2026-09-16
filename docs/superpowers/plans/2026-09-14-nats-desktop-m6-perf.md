@@ -370,3 +370,10 @@ Run C（20 msg/s 低速，聚合批 ~400B < 8KB → 全走内联 eval、绕开 p
 | A/B/C 已有 | 有 | 有（三档速率/路径） | 110/110/265 MB/h |
 
 判读规则：D1、E 斜率与 A/B/C 对齐即可归因；若两腿都平而 A/B/C 棘轮，则需 nav×load 交互项假设。产物：`bin/legD-floodonly/`（D0）、`bin/legD1-deliveryonly/`、`bin/legE-navonly/`。
+
+### §12.3 Run D1（仅投递·无导航）：browser +231.3MB/h —— 投递通道单独即可驱动棘轮（2026-09-17 07:45）
+
+`bin/legD1-deliveryonly/`：会话 m6mem.x 建立成功（VERIFY-OK），应用钉在消息页（realtime 模式），flood 1k msg/s × 1h 全程（3.57M 条，99.2%），**零导航**。结果：browser 进程 **+231.3MB/h**、wv_sum +228.0、主进程 +6.0（平坦）。
+- **投递 alone 即可驱动 browser 棘轮，且速率高于全浸泡档（110）**——导航换页对消息页的周期性卸载（7/8 占空比）反而稀释了棘轮。
+- 矩阵现状：空闲 D0=0.1 / 纯投递 D1=231 / 投递1k+导航 A,B,24h=108-110 / 投递20+导航 C=265。纯导航 E2（1 msg/s，修复后采样器）排队中，用于分离导航独立分量。
+- 对修复方向的含义：**WS 数据面旁路（会话消息批改走自建回环 WebSocket）正中要害**——无论残余滞留位于 parked fetch、eval 拼接还是高频事件触发的 browser 合成器churn，把 1k msg/s 级数据流整体挪出 wails 事件管线都直接移除该驱动。若 E2 显示导航还有独立分量，则追加前端卸载卫生审计为第二工作项。
