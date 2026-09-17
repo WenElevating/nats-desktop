@@ -377,3 +377,24 @@ Run C（20 msg/s 低速，聚合批 ~400B < 8KB → 全走内联 eval、绕开 p
 - **投递 alone 即可驱动 browser 棘轮，且速率高于全浸泡档（110）**——导航换页对消息页的周期性卸载（7/8 占空比）反而稀释了棘轮。
 - 矩阵现状：空闲 D0=0.1 / 纯投递 D1=231 / 投递1k+导航 A,B,24h=108-110 / 投递20+导航 C=265。纯导航 E2（1 msg/s，修复后采样器）排队中，用于分离导航独立分量。
 - 对修复方向的含义：**WS 数据面旁路（会话消息批改走自建回环 WebSocket）正中要害**——无论残余滞留位于 parked fetch、eval 拼接还是高频事件触发的 browser 合成器churn，把 1k msg/s 级数据流整体挪出 wails 事件管线都直接移除该驱动。若 E2 显示导航还有独立分量，则追加前端卸载卫生审计为第二工作项。
+
+### §12.4 修复验证：WS 数据面旁路生效（2026-09-17 14:50）
+
+**实施**（计划 `2026-09-17-nats-desktop-leakb-ws-dataplane.md`，Tasks 1-5 全部经子代理 TDD 执行，commit 669f990→c9e3b31→52cef33）：`internal/messaging/wshub.go` 回环 WS hub（token 鉴权 + 64 批有界缓冲 + 溢出断连）；`session:msgs` 数据面 hub-only（nil 回退旧路径；`session:state` 控制面不动）；前端 `msgChannel` + useSessions 异步接入。CI desktop-ci 全绿（含 -race）。
+
+**验证跑**（`bin/legD1-wsfix/ppsample2.csv`，与 §12.3 leg D1 同载同型：realtime 会话钉在消息页、零导航、1k msg/s）：
+
+| 指标 | 修复前（leg D1） | 修复后（本跑） |
+|---|---|---|
+| browser 进程斜率 | **+231.3 MB/h** | **+2.51 MB/h**（≤10 闸门 PASS，92× 改善）|
+| wv_sum 斜率 | +228.0 MB/h | +1.29 MB/h |
+| main 斜率 | +5.7 MB/h | +6.0 MB/h（平坦）|
+| 轨迹形态 | 线性棘轮 | 140-153MB 锯齿、均值平坦 |
+| 帧渲染证明 | — | flood 2.81M 条经 WS 送达（77.9% 达成）；UIA「尚未收到消息」占位符消失 |
+
+**实施过程中揪出的三个真缺陷（均已修复+回归测试/杠杆）**：
+1. **coder/websocket 默认跨源拒绝**（accept.go:95）：webview 的 `Origin: http://wails.localhost` 握手被 403，数据面静默饿死而控制面计数正常——极易误判。修复 `InsecureSkipVerify: true`（真安全边界=每次启动 token 常量时比较 + 仅回环；Origin 头客户端可伪造，对本端点无增量价值）+ `TestMsgHubAcceptsBrowserOrigin` 回归（52cef33）。
+2. **WebView2 UIA 无障碍自动激活失效**（本机 ~2026-09-17 12:00 起）：渲染器 AX 经 CDP 验证健康、Chrome/Edge 正常、UIA 树却空心——24h 浸泡的「UIA 冻结」缺陷极可能是同机制中途掉线（翻案候选）。新增 `NATSDESKTOP_FORCE_AX=1` 杠杆（`--force-renderer-accessibility`，仿 GPU lever），9 按钮即时物化；UIA 自动化从此不依赖脆弱的自动激活。
+3. **exe 构建顺序陷阱**：前端改动必须 `npm run build` 后再 `go build`，否则 exe 内嵌旧 dist——首轮验证假阳性即栽在这里（旧前端订阅 wails 事件、新 Go 已切 hub → 零帧渲染 → 内存平坦假象）。
+
+**剩余工作**：导航/页面挂载分量（E2=233.7MB/h，嫌疑=监控/流/KV 页挂载重拉 10k 流/100k KV 巨型数据集走同条 wails 大载荷通道）——独立计划跟进；两分量修复后跑 24h 深泡#3 终验（级联假设一并验证）。
