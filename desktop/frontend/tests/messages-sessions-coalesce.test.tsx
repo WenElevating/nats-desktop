@@ -33,9 +33,28 @@ vi.mock("@wailsio/runtime", () => ({
   },
 }));
 
+// Data-plane capture: message batches arrive through the mocked msgChannel
+// (useSessions connects after the DataChannel binding resolves), so fireMsgs
+// fires onData — the same payload the wails session:msgs event used to carry.
+const channel = vi.hoisted(() => ({
+  onData: null as null | ((data: unknown) => void),
+}));
+
+vi.mock("../src/lib/msgChannel", () => ({
+  connectMsgChannel: (_url: string, _token: string, onData: (data: unknown) => void) => {
+    channel.onData = onData;
+    return {
+      close: () => {
+        channel.onData = null;
+      },
+    };
+  },
+}));
+
 vi.mock("../src/lib/bindings", () => ({
   PushMode: { PushRealtime: "realtime", PushBatch: "batch" },
   CreateSession: vi.fn(),
+  DataChannel: async () => ({ url: "ws://127.0.0.1:1/messaging/data", token: "test-token" }),
   PauseSession: vi.fn(),
   ResumeSession: vi.fn(),
   ClearSession: vi.fn(),
@@ -60,7 +79,7 @@ const manualScheduler: FlushScheduler = (cb) => {
 
 const fireMsgs = (batch: unknown) =>
   act(() => {
-    handlers.get("session:msgs")?.({ data: batch });
+    channel.onData?.(batch);
   });
 
 const fireState = (st: unknown) =>
@@ -92,6 +111,7 @@ const msg = (session_id: string, seq: number): MsgOut => ({
 
 beforeEach(() => {
   handlers.clear();
+  channel.onData = null;
   frameFlush = () => {};
   cancels = 0;
   vi.mocked(ListSessions).mockResolvedValue(null as never);
@@ -103,8 +123,10 @@ afterEach(() => {
   delete (document as { hidden?: boolean }).hidden;
 });
 
-it("buffers a 1,000-event realtime burst without per-event setState and conserves order on one flush", () => {
+it("buffers a 1,000-event realtime burst without per-event setState and conserves order on one flush", async () => {
   const { result } = renderHook(() => useSessions({ scheduler: manualScheduler }));
+  // DataChannel() resolves on a microtask; flush it so the channel is open.
+  await act(async () => {});
   fireState(state());
 
   // 1,000 single-message events (the realtime wire shape at 1k msg/s).
@@ -121,8 +143,9 @@ it("buffers a 1,000-event realtime burst without per-event setState and conserve
   expect(list.map((m: MsgOut) => m.seq)).toEqual(Array.from({ length: 1000 }, (_, i) => i + 1));
 });
 
-it("folds multiple flush cycles and interleaved sessions without cross-talk", () => {
+it("folds multiple flush cycles and interleaved sessions without cross-talk", async () => {
   const { result } = renderHook(() => useSessions({ scheduler: manualScheduler }));
+  await act(async () => {}); // let the DataChannel binding open the channel
   fireState(state({ id: "a" }));
   fireState(state({ id: "b" }));
 
@@ -137,8 +160,9 @@ it("folds multiple flush cycles and interleaved sessions without cross-talk", ()
   expect(result.current.messages["b"].map((m: MsgOut) => m.seq)).toEqual([1, 2]);
 });
 
-it("trims the pending buffer at the 2x high-water mark and keeps the newest cap after flush", () => {
+it("trims the pending buffer at the 2x high-water mark and keeps the newest cap after flush", async () => {
   const { result } = renderHook(() => useSessions({ scheduler: manualScheduler }));
+  await act(async () => {}); // let the DataChannel binding open the channel
   fireState(state());
 
   // 35,000 buffered for one session (default cap 10,000): the high-water trim
@@ -165,8 +189,9 @@ it("keeps the latest session:state snapshot per id (counters exact, no stale reg
   expect(result.current.sessions[0]).toMatchObject({ id: "s-1", total: 30, rate_msg_s: 999.5 });
 });
 
-it("clear() drops the session's unflushed pending messages (no resurrection)", () => {
+it("clear() drops the session's unflushed pending messages (no resurrection)", async () => {
   const { result } = renderHook(() => useSessions({ scheduler: manualScheduler }));
+  await act(async () => {}); // let the DataChannel binding open the channel
   fireState(state());
   fireMsgs([msg("s-1", 1)]);
   fireMsgs([msg("s-1", 2)]);
@@ -181,8 +206,9 @@ it("clear() drops the session's unflushed pending messages (no resurrection)", (
   expect(result.current.messages["s-1"]).toEqual([]);
 });
 
-it("unmount cancels the scheduled flush (no post-unmount setState)", () => {
+it("unmount cancels the scheduled flush (no post-unmount setState)", async () => {
   const { unmount } = renderHook(() => useSessions({ scheduler: manualScheduler }));
+  await act(async () => {}); // let the DataChannel binding open the channel
   fireMsgs([msg("s-1", 1)]);
   expect(frameFlush).not.toBe(() => {}); // a flush is scheduled
   unmount();
@@ -194,6 +220,7 @@ it("default scheduler: flush is paused while document.hidden and resumes on visi
   // Stub hidden BEFORE the hook mounts so the first schedule sees it.
   Object.defineProperty(document, "hidden", { configurable: true, value: true });
   const { result } = renderHook(() => useSessions()); // default rAF scheduler
+  await act(async () => {}); // let the DataChannel binding open the channel
   fireState(state());
   fireMsgs([msg("s-1", 1)]);
 

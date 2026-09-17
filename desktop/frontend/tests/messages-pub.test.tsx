@@ -31,6 +31,7 @@ vi.mock("../src/lib/bindings", () => ({
   // Sessions surface (SessionsPanel is part of the MessagesPage graph).
   PushMode: { PushRealtime: "realtime", PushBatch: "batch" },
   CreateSession: vi.fn(),
+  DataChannel: async () => ({ url: "ws://127.0.0.1:1/messaging/data", token: "test-token" }),
   PauseSession: vi.fn(),
   ResumeSession: vi.fn(),
   ClearSession: vi.fn(),
@@ -40,6 +41,12 @@ vi.mock("../src/lib/bindings", () => ({
   Request: vi.fn(),
   Trace: vi.fn(),
   GetSettings: vi.fn(),
+}));
+
+// The Sessions tab test mounts SessionsPanel, whose useSessions opens the
+// loopback WS data-plane channel; no-op it so no real socket is attempted.
+vi.mock("../src/lib/msgChannel", () => ({
+  connectMsgChannel: () => ({ close: () => {} }),
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));

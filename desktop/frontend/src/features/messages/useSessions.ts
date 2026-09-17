@@ -6,12 +6,14 @@ import {
   ClearSession,
   CloseSession,
   CreateSession,
+  DataChannel,
   ListSessions,
   PauseSession,
   ResumeSession,
   type SessionSpec,
   type SessionState,
 } from "../../lib/bindings";
+import { connectMsgChannel, type MsgChannel } from "@/lib/msgChannel";
 import { applyPendingMsgs, applyStateUpsert, byId, DEFAULT_BUFFER, type MsgOut } from "./sessionsLogic";
 
 // The wire type and display cap live in sessionsLogic.ts (pure state machine,
@@ -59,9 +61,11 @@ const HIGH_WATER_FACTOR = 2;
 
 /**
  * Frontend state for the subscription sessions tab (spec §6.4). Hydrates the
- * session list from ListSessions(), then keeps it live via the Wails events:
- * `session:msgs` appends batches per session (dropping the oldest beyond the
- * per-session buffer cap) and `session:state` upserts status snapshots.
+ * session list from ListSessions(), then keeps it live: `session:msgs`
+ * batches arrive over the loopback WS data-plane channel (DataChannel binding
+ * + connectMsgChannel, m6-perf §12.3; dropping the oldest beyond the
+ * per-session buffer cap) while `session:state` upserts status snapshots via
+ * wails events (control plane).
  *
  * M6 Task 8 — realtime-push coalescing: at 1k msg/s realtime mode delivers
  * one Wails event per message; feeding each straight into setState re-rendered
@@ -147,10 +151,24 @@ export function useSessions(options?: { scheduler?: FlushScheduler }): SessionsA
   useEffect(() => {
     let alive = true;
 
-    const offMsgs = Events.On("session:msgs", (e: { data?: unknown }) => {
-      bufferMsgs(e?.data);
-      scheduleFlush();
-    });
+    // Data plane (m6-perf §12.3): §7.1.3 batches ride the loopback WS
+    // channel; the wails event path no longer carries message batches.
+    // session:state below remains a wails event (control plane).
+    // DataChannel() is a $CancellablePromise like every binding — resolve
+    // it; do NOT treat it as synchronous.
+    let channel: MsgChannel | null = null;
+    DataChannel()
+      .then((dc) => {
+        if (!alive || !dc?.url || !dc?.token) return;
+        channel = connectMsgChannel(dc.url, dc.token, (data) => {
+          bufferMsgs(data);
+          scheduleFlush();
+        });
+      })
+      .catch(() => {
+        /* endpoint unavailable: live frames pause; counters keep flowing
+           via session:state and §6.4's no-replay-on-resume covers the UI */
+      });
 
     const offState = Events.On("session:state", (e: { data?: unknown }) => {
       const st = e?.data as SessionState;
@@ -183,7 +201,7 @@ export function useSessions(options?: { scheduler?: FlushScheduler }): SessionsA
 
     return () => {
       alive = false;
-      offMsgs();
+      channel?.close();
       offState();
       document.removeEventListener("visibilitychange", onVisibility);
       if (cancelFlush.current) {

@@ -5,7 +5,7 @@ import { ListSessions, type SessionState } from "../src/lib/bindings";
 
 // Frontend perf gate (Task 11, spec §6.4 / §12; jsdom-logic-only — no NATS
 // server, no drawing: frame-rate validation is Task 13's live measurement).
-// The full production path is exercised: useSessions' session:msgs handler
+// The full production path is exercised: useSessions' data-plane batch handler
 // (Task 8 coalescing buffer + one applyPendingMsgs fold per flush) + React
 // commit, driven by act-batched event firing in the brief's flood profile
 // (500 msgs x 20 batches = 10,000 events). The injected scheduler mirrors the
@@ -15,7 +15,9 @@ import { ListSessions, type SessionState } from "../src/lib/bindings";
 // kept, seq-continuous).
 //
 // Mocks mirror tests/messages-sessions.test.tsx: @wailsio/runtime Events
-// (handlers captured), the bindings surface, sonner. i18n is real.
+// (handlers captured), the bindings surface (DataChannel resolves a loopback
+// endpoint), the msgChannel module (onData captured for batch firing),
+// sonner. i18n is real.
 
 const handlers = vi.hoisted(() => new Map<string, (e: { data: unknown }) => void>());
 
@@ -30,9 +32,27 @@ vi.mock("@wailsio/runtime", () => ({
   },
 }));
 
+// Data-plane capture: message batches arrive through the mocked msgChannel
+// (useSessions connects after the DataChannel binding resolves).
+const channel = vi.hoisted(() => ({
+  onData: null as null | ((data: unknown) => void),
+}));
+
+vi.mock("../src/lib/msgChannel", () => ({
+  connectMsgChannel: (_url: string, _token: string, onData: (data: unknown) => void) => {
+    channel.onData = onData;
+    return {
+      close: () => {
+        channel.onData = null;
+      },
+    };
+  },
+}));
+
 vi.mock("../src/lib/bindings", () => ({
   PushMode: { PushRealtime: "realtime", PushBatch: "batch" },
   CreateSession: vi.fn(),
+  DataChannel: async () => ({ url: "ws://127.0.0.1:1/messaging/data", token: "test-token" }),
   PauseSession: vi.fn(),
   ResumeSession: vi.fn(),
   ClearSession: vi.fn(),
@@ -79,14 +99,21 @@ const fire = (name: string, data: unknown) =>
     handlers.get(name)?.({ data });
   });
 
+const fireMsgs = (batch: unknown) =>
+  act(() => {
+    channel.onData?.(batch);
+  });
+
 beforeEach(() => {
   handlers.clear();
+  channel.onData = null;
   frameFlush = () => {};
   vi.mocked(ListSessions).mockResolvedValue(null as never);
 });
 
 it("ingests 10,000 session:msgs (500x20 batches) in < 2s with an exact final buffer", async () => {
   const { result } = renderHook(() => useSessions({ scheduler: manualScheduler }));
+  await act(async () => {}); // let the DataChannel binding open the channel
   fire("session:state", state());
 
   // The brief's flood profile: 20 batches of 500 realtime messages, buffered
@@ -96,7 +123,7 @@ it("ingests 10,000 session:msgs (500x20 batches) in < 2s with an exact final buf
   );
 
   const t0 = performance.now();
-  for (const batch of batches) fire("session:msgs", batch);
+  for (const batch of batches) fireMsgs(batch);
   const ingestMs = performance.now() - t0;
 
   // Coalescing invariants: the burst lands in the buffer, React state is

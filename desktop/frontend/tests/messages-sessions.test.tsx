@@ -20,8 +20,10 @@ import { toBase64, toBase64Bytes } from "../src/lib/base64";
 // Scenario assertions match user-visible (interpolated) English text, so this
 // file uses the real i18n module (en resources, synchronous init) like the
 // publish suite. Mocked: @wailsio/runtime Events (handlers captured so tests
-// can fire session:msgs / session:state), the bindings surface, sonner, and
-// the connection state (hoisted `connState` mutated per test).
+// can fire session:state), the bindings surface (DataChannel resolves a
+// loopback endpoint), the msgChannel module (onData captured so tests fire
+// message batches the way the real channel delivers them), sonner, and the
+// connection state (hoisted `connState` mutated per test).
 const connState = vi.hoisted(() => ({
   state: "connected",
   context: "dev",
@@ -47,6 +49,24 @@ vi.mock("@wailsio/runtime", () => ({
   },
 }));
 
+// Data-plane capture: useSessions connects via connectMsgChannel once the
+// DataChannel binding resolves and delivers each §7.1.3 batch through onData
+// — the same payload the wails session:msgs event used to carry.
+const channel = vi.hoisted(() => ({
+  onData: null as null | ((data: unknown) => void),
+}));
+
+vi.mock("../src/lib/msgChannel", () => ({
+  connectMsgChannel: (_url: string, _token: string, onData: (data: unknown) => void) => {
+    channel.onData = onData;
+    return {
+      close: () => {
+        channel.onData = null;
+      },
+    };
+  },
+}));
+
 vi.mock("../src/app/connstate", () => ({
   useConnState: () => connState,
 }));
@@ -54,6 +74,7 @@ vi.mock("../src/app/connstate", () => ({
 vi.mock("../src/lib/bindings", () => ({
   PushMode: { PushRealtime: "realtime", PushBatch: "batch" },
   CreateSession: vi.fn(),
+  DataChannel: async () => ({ url: "ws://127.0.0.1:1/messaging/data", token: "test-token" }),
   PauseSession: vi.fn(),
   ResumeSession: vi.fn(),
   ClearSession: vi.fn(),
@@ -126,8 +147,7 @@ const msg = (seq: number, over: Partial<MsgOut> = {}): MsgOut => ({
   ...over,
 });
 
-const fireMsgs = (batch: MsgOut[]) =>
-  act(() => runtime.handlers.get("session:msgs")?.({ data: batch }));
+const fireMsgs = (batch: MsgOut[]) => act(() => channel.onData?.(batch));
 
 const fireState = (st: SessionState) =>
   act(() => runtime.handlers.get("session:state")?.({ data: st }));
@@ -146,6 +166,7 @@ beforeEach(() => {
   connState.state = "connected";
   runtime.handlers.clear();
   runtime.offs.length = 0;
+  channel.onData = null;
   createObjectURL.mockClear();
   revokeObjectURL.mockClear();
   (URL as unknown as { createObjectURL: unknown }).createObjectURL = createObjectURL;
@@ -376,16 +397,15 @@ it("hydrates existing sessions from ListSessions and selects the first", async (
   expect(await screen.findByTestId("session-view")).toBeTruthy();
 });
 
-it("unsubscribes both events when the panel unmounts", () => {
+it("closes the data channel and unsubscribes the control plane on unmount", async () => {
   const { unmount } = render(<SessionsPanel />);
-  expect(runtime.handlers.has("session:msgs")).toBe(true);
-  expect(runtime.handlers.has("session:state")).toBe(true);
+  // DataChannel() resolves on a microtask; flush it so the channel is open.
+  await act(async () => {});
+  expect(channel.onData).not.toBeNull();
 
   unmount();
-  expect(runtime.offs).toContain("session:msgs");
-  expect(runtime.offs).toContain("session:state");
-  expect(runtime.handlers.has("session:msgs")).toBe(false);
-  expect(runtime.handlers.has("session:state")).toBe(false);
+  expect(channel.onData).toBeNull(); // mock close() ran
+  expect(runtime.offs).toEqual(["session:state"]); // only the control plane remains
 });
 
 it("wires the sessions tab into the messages page (placeholder removed)", async () => {

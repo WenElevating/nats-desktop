@@ -62,9 +62,28 @@ vi.mock("../src/app/connstate", () => ({
   useConnState: () => connState,
 }));
 
+// Data-plane capture: message batches arrive through the mocked msgChannel
+// (useSessions connects after the DataChannel binding resolves), so the
+// sanity test below fires onData directly.
+const channel = vi.hoisted(() => ({
+  onData: null as null | ((data: unknown) => void),
+}));
+
+vi.mock("../src/lib/msgChannel", () => ({
+  connectMsgChannel: (_url: string, _token: string, onData: (data: unknown) => void) => {
+    channel.onData = onData;
+    return {
+      close: () => {
+        channel.onData = null;
+      },
+    };
+  },
+}));
+
 vi.mock("../src/lib/bindings", () => ({
   PushMode: { PushRealtime: "realtime", PushBatch: "batch" },
   CreateSession: vi.fn(),
+  DataChannel: async () => ({ url: "ws://127.0.0.1:1/messaging/data", token: "test-token" }),
   PauseSession: vi.fn(),
   ResumeSession: vi.fn(),
   ClearSession: vi.fn(),
@@ -124,6 +143,7 @@ const openFilters = () => fireEvent.click(screen.getByTestId("filters-toggle"));
 beforeEach(() => {
   connState.state = "connected";
   runtime.handlers.clear();
+  channel.onData = null;
   vi.mocked(GetSettings).mockResolvedValue(settingsFixture() as never);
   vi.mocked(ListSessions).mockResolvedValue(null as never);
   vi.mocked(CreateSession).mockResolvedValue(state({ id: "s-2", subject: "orders.>" }) as never);
@@ -243,19 +263,17 @@ it("still renders delivered session messages after the filter additions", async 
   await screen.findByTestId("session-view");
 
   act(() =>
-    runtime.handlers.get("session:msgs")?.({
-      data: [
-        {
-          session_id: "s-1",
-          seq: 1,
-          subject: "telemetry.a",
-          payload_b64: toBase64("hit"),
-          payload_size: 3,
-          timestamp: "2026-01-01T00:00:00Z",
-          is_utf8: true,
-        } satisfies MsgOut,
-      ],
-    }),
+    channel.onData?.([
+      {
+        session_id: "s-1",
+        seq: 1,
+        subject: "telemetry.a",
+        payload_b64: toBase64("hit"),
+        payload_size: 3,
+        timestamp: "2026-01-01T00:00:00Z",
+        is_utf8: true,
+      } satisfies MsgOut,
+    ]),
   );
   await waitFor(() =>
     expect(document.querySelectorAll('[data-testid="session-row"]').length).toBeGreaterThan(0),
