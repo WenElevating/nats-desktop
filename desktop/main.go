@@ -106,7 +106,17 @@ func main() {
 		}
 	}
 	manager := connections.NewManager(reg, logger, emit)
-	msgSvc = messaging.NewMessagingService(manager, logger, emit, settingsPath)
+	// Data-plane hub (leak B bypass, m6-perf §12.3): loopback WS for session
+	// message batches. Failure to start degrades to the legacy wails-event
+	// path (nil hub) — control plane unaffected.
+	hub := messaging.NewMsgHub(logger)
+	if _, err := hub.Start(); err != nil {
+		logger.Error("msg hub start failed; session data falls back to wails events", "err", err)
+		hub = nil
+	} else {
+		defer hub.Close()
+	}
+	msgSvc = messaging.NewMessagingService(manager, logger, emit, settingsPath, hub)
 
 	// JetStream administration facade (streams/consumers/backup, spec
 	// §6.6/§6.7): CallResult-embedding results over jsm handles keyed off the

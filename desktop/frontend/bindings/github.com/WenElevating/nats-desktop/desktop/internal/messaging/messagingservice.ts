@@ -44,6 +44,15 @@ export function CreateSession(spec: $models.SessionSpec): $CancellablePromise<$m
 }
 
 /**
+ * DataChannel reports the hub endpoint; zero value when the hub is absent
+ * (frontend then falls back to wails events — which also carry no data in
+ * that mode because the emit path is active, so the pairing stays coherent).
+ */
+export function DataChannel(): $CancellablePromise<$models.DataChannelInfo> {
+    return $Call.ByID(1089283573);
+}
+
+/**
  * ListSessions returns a snapshot of every session (including closed ones),
  * sorted by ID. Never nil so the frontend can map over it.
  */

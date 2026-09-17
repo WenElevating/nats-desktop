@@ -11,6 +11,7 @@ export {
 } from "./models.js";
 
 export type {
+    DataChannelInfo,
     JSPosition,
     PubForm,
     PubResult,

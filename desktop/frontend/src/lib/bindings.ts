@@ -34,6 +34,7 @@ export {
   ClearSession,
   CloseSession,
   CreateSession,
+  DataChannel,
   ListSessions,
   PauseSession,
   Publish,
@@ -45,6 +46,7 @@ export {
 // of its members and never the $zero "" Go zero value.
 export { PushMode } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/messaging/models.js";
 export type {
+  DataChannelInfo,
   JSPosition,
   PubForm,
   PubResult,
