@@ -100,8 +100,9 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("restore: %+v", res)
 	}
 	// 恢复是最终一致：消息重放需要时间追平（CI 慢盘 + -race 减速下首查
-	// 可能只见部分消息——M6 CI 首跑在案），轮询至 50 带死线。
-	deadline := time.Now().Add(15 * time.Second)
+	// 可能只见部分消息——M6 CI 首跑在案，2026-09-17 复跑 15s 只到 24/50
+	// 再次在案），轮询至 50 带死线；45s 与其余 flake 加固档一致。
+	deadline := time.Now().Add(45 * time.Second)
 	for {
 		d := svc.GetStreamDetail("BK")
 		if d.Ok() && d.Summary.Messages == 50 {
