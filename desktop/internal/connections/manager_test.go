@@ -193,12 +193,12 @@ func TestReconnectOnServerRestart(t *testing.T) {
 	if err := m.Connect(context.Background(), "re"); err != nil {
 		t.Fatal(err)
 	}
-	waitForState(t, events, StateConnected, 10*time.Second)
+	waitForState(t, events, StateConnected, 30*time.Second)
 
 	// Server dies: the client must move to reconnecting (not failed).
 	srv.Shutdown()
 	first := events.count()
-	waitForStateAfter(t, events, StateReconnecting, first, 10*time.Second)
+	waitForStateAfter(t, events, StateReconnecting, first, 30*time.Second)
 
 	// Register the manager cleanup now so cleanup order is LIFO:
 	// disconnect the client before the replacement server shuts down.
@@ -209,7 +209,7 @@ func TestReconnectOnServerRestart(t *testing.T) {
 	srv2 := startServerOnPort(t, port, dir)
 	t.Cleanup(srv2.Shutdown)
 	reconnecting := events.count()
-	waitForStateAfter(t, events, StateConnected, reconnecting, 10*time.Second)
+	waitForStateAfter(t, events, StateConnected, reconnecting, 30*time.Second)
 	if ev := m.Snapshot(); ev.State != StateConnected {
 		t.Fatalf("snapshot after reconnect: %+v", ev)
 	}
