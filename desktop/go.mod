@@ -3,6 +3,7 @@ module github.com/WenElevating/nats-desktop/desktop
 go 1.26.0
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/klauspost/compress v1.20.0
 	github.com/nats-io/jsm.go v0.4.2-0.20260907110945-19fe165a004c
 	github.com/nats-io/nats-server/v2 v2.15.0-preview.1
@@ -14,7 +15,6 @@ require (
 require (
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.8.0 // indirect
-	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
