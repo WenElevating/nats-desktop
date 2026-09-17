@@ -18,7 +18,7 @@ CI does **not** run `wails3 generate` (the beta CLI output drifts between versio
 (`desktop/internal/...`):
 
 ```bash
-wails3 generate bindings -ts -clean=true
+wails3 generate bindings -ts -i -clean=true
 ```
 
 Then commit the regenerated `frontend/bindings/` together with your Go change. A stale
