@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"testing"
 	"time"
 
@@ -49,7 +50,9 @@ func dialHub(t *testing.T, url, token string) (*websocket.Conn, func() ([]byte, 
 func TestMsgHubRejectsWrongToken(t *testing.T) {
 	h := NewMsgHub(testLog(t))
 	url, err := h.Start()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer h.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -61,7 +64,9 @@ func TestMsgHubRejectsWrongToken(t *testing.T) {
 func TestMsgHubLoopbackOnly(t *testing.T) {
 	h := NewMsgHub(testLog(t))
 	url, err := h.Start()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer h.Close()
 	if want := "ws://127.0.0.1:"; len(url) < len(want) || url[:len(want)] != want {
 		t.Fatalf("hub url %q must bind loopback", url)
@@ -77,17 +82,27 @@ func TestMsgHubBroadcastFanout(t *testing.T) {
 	_ = c2
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if h.clientCount() == 2 { break }
+		if h.clientCount() == 2 {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if h.clientCount() != 2 { t.Fatalf("clients = %d, want 2", h.clientCount()) }
+	if h.clientCount() != 2 {
+		t.Fatalf("clients = %d, want 2", h.clientCount())
+	}
 	h.BroadcastData(map[string]any{"session_id": "sub-1", "seq": 1})
 	for _, read := range [](func() ([]byte, error)){read1, read2} {
 		b, err := read()
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		var got map[string]any
-		if err := json.Unmarshal(b, &got); err != nil { t.Fatal(err) }
-		if got["session_id"] != "sub-1" { t.Fatalf("got %v", got) }
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["session_id"] != "sub-1" {
+			t.Fatalf("got %v", got)
+		}
 	}
 }
 
@@ -97,7 +112,9 @@ func TestMsgHubOverflowDisconnectsSlowClient(t *testing.T) {
 	conn, _ := dialHub(t, url, token)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if h.clientCount() == 1 { break }
+		if h.clientCount() == 1 {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	// Never read: 64 buffered batches overflow → hub must drop the client,
@@ -119,7 +136,31 @@ func TestMsgHubOverflowDisconnectsSlowClient(t *testing.T) {
 
 func TestMsgHubCloseIdempotent(t *testing.T) {
 	h := NewMsgHub(testLog(t))
-	if _, err := h.Start(); err != nil { t.Fatal(err) }
-	if err := h.Close(); err != nil { t.Fatal(err) }
-	if err := h.Close(); err != nil { t.Fatalf("second Close: %v", err) }
+	if _, err := h.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestMsgHubAcceptsBrowserOrigin pins the wails-webview handshake: the browser
+// sends Origin http://wails.localhost and MUST be accepted (default cross-origin
+// rejection starved the data plane silently — m6-perf §12.4). Auth is the token
+// + loopback checks, not the client-controlled Origin header.
+func TestMsgHubAcceptsBrowserOrigin(t *testing.T) {
+	h := NewMsgHub(testLog(t))
+	url, token := mustStart(t, h)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, url+"?token="+token, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{"http://wails.localhost"}},
+	})
+	if err != nil {
+		t.Fatalf("dial with browser origin must succeed: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
 }

@@ -105,7 +105,13 @@ func (h *MsgHub) handleData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	conn, err := websocket.Accept(w, r, nil)
+	// InsecureSkipVerify disables coder/websocket's default cross-origin
+	// rejection (accept.go:95), which 403s the webview's Origin
+	// (http://wails.localhost) and silently starves the data plane. Safe here:
+	// the real gates are the per-boot token (checked above, constant-time) and
+	// the loopback-only remote addr; an Origin header is client-controlled and
+	// adds nothing against a local caller that already knows neither.
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		return
 	}
