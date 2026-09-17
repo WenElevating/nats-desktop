@@ -201,7 +201,7 @@ func newSessionStackRec(t *testing.T, url string, defaultBuf int, defaultPush Pu
 			sm.NotifyConnState(ev) // Task 7 side-band wiring (non-blocking)
 		}
 	})
-	sm = NewSessionManager(mgr, log, rec.emit, defaultBuf, defaultPush)
+	sm = NewSessionManager(mgr, log, rec.emit, nil, defaultBuf, defaultPush)
 
 	store := connections.NewStore(reg)
 	if err := store.Save(context.Background(), connections.ContextForm{Name: "sess", URL: url}, 0); err != nil {
@@ -817,7 +817,7 @@ func TestSessionInvalidSubject(t *testing.T) {
 	rec := newEmitRecorder()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := connections.NewManager(reg, log, rec.emit) // never connected
-	sm := NewSessionManager(mgr, log, rec.emit, 10000, PushRealtime)
+	sm := NewSessionManager(mgr, log, rec.emit, nil, 10000, PushRealtime)
 
 	for _, subj := range []string{"foo bar", " a", "a ", "", "a\tb", "a\nb"} {
 		st, err := sm.CreateSession(context.Background(), SessionSpec{Subject: subj})
@@ -1444,7 +1444,7 @@ func TestSessionReconnectResubscribes(t *testing.T) {
 			sm.NotifyConnState(ev) // main.go-style side-band (Task 7 wiring)
 		}
 	})
-	sm = NewSessionManager(mgr, log, rec.emit, 10000, PushRealtime)
+	sm = NewSessionManager(mgr, log, rec.emit, nil, 10000, PushRealtime)
 	t.Cleanup(srv.Shutdown)   // registered first: runs after client teardown
 	t.Cleanup(mgr.Disconnect) // disconnect before the replacement server dies
 	t.Cleanup(sm.CloseAll)    // registered last: runs first (live conn)

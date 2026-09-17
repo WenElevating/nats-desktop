@@ -45,6 +45,7 @@ type MessagingService struct {
 	log          *slog.Logger
 	emit         func(name string, data any)
 	settingsPath string
+	hub          *MsgHub
 
 	// Sessions is the subscription-session manager the service fronts. It
 	// is exported so main.go can forward connections.Manager conn:state
@@ -56,17 +57,20 @@ type MessagingService struct {
 
 // NewMessagingService builds the bound facade over mgr. A nil log discards
 // output, a nil emit turns events into no-ops, and an unreadable settings
-// file leaves the spec defaults in place. The SessionManager is constructed
-// eagerly (Sessions is never nil); its buffer/push defaults are read from
-// settings once and serve purely as fallback (see the package comment).
-func NewMessagingService(mgr *connections.Manager, log *slog.Logger, emit func(string, any), settingsPath string) *MessagingService {
+// file leaves the spec defaults in place. A nil hub keeps the legacy
+// data plane (session:msgs batches ride the emit wails event); a non-nil hub
+// routes them to the loopback WS broadcast instead — control events always
+// stay on emit. The SessionManager is constructed eagerly (Sessions is never
+// nil); its buffer/push defaults are read from settings once and serve purely
+// as fallback (see the package comment).
+func NewMessagingService(mgr *connections.Manager, log *slog.Logger, emit func(string, any), settingsPath string, hub *MsgHub) *MessagingService {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	if emit == nil {
 		emit = func(string, any) {}
 	}
-	s := &MessagingService{mgr: mgr, log: log, emit: emit, settingsPath: settingsPath}
+	s := &MessagingService{mgr: mgr, log: log, emit: emit, settingsPath: settingsPath, hub: hub}
 
 	defBuf, defPush := 0, PushRealtime
 	if st, err := settings.Load(settingsPath); err == nil {
@@ -77,7 +81,14 @@ func NewMessagingService(mgr *connections.Manager, log *slog.Logger, emit func(s
 			defPush = PushBatch
 		}
 	}
-	s.Sessions = NewSessionManager(mgr, log, emit, defBuf, defPush)
+	dataEmit := func(v any) {
+		if hub != nil {
+			hub.BroadcastData(v)
+			return
+		}
+		emit(EventSessionMsgs, v)
+	}
+	s.Sessions = NewSessionManager(mgr, log, emit, dataEmit, defBuf, defPush)
 	return s
 }
 
@@ -152,6 +163,25 @@ func (s *MessagingService) CloseSession(id string) error { return s.Sessions.Clo
 // ListSessions returns a snapshot of every session (including closed ones),
 // sorted by ID. Never nil so the frontend can map over it.
 func (s *MessagingService) ListSessions() []SessionState { return s.Sessions.List() }
+
+// DataChannelInfo is the loopback WS endpoint the frontend uses for the
+// session data plane (§7.1.3 batches). Token is a per-boot capability
+// credential: it must never be logged (§13.3).
+type DataChannelInfo struct {
+	URL   string `json:"url"`
+	Token string `json:"token"`
+}
+
+// DataChannel reports the hub endpoint; zero value when the hub is absent
+// (frontend then falls back to wails events — which also carry no data in
+// that mode because the emit path is active, so the pairing stays coherent).
+func (s *MessagingService) DataChannel() DataChannelInfo {
+	if s.hub == nil {
+		return DataChannelInfo{}
+	}
+	u, tok := s.hub.DataChannel()
+	return DataChannelInfo{URL: u, Token: tok}
+}
 
 // conn returns the live connection, or nil while disconnected (mirrors
 // SessionManager.conn).

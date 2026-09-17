@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats.go"
 
@@ -47,7 +48,7 @@ func newDisconnectedService(t *testing.T, settingsPath string) (*MessagingServic
 	reg := natscontext.NewRegistry(natscontext.NewFileBackendAt(t.TempDir()))
 	rec := newEmitRecorder()
 	mgr := connections.NewManager(reg, slog.New(slog.NewTextHandler(io.Discard, nil)), rec.emit)
-	return NewMessagingService(mgr, slog.New(slog.NewTextHandler(io.Discard, nil)), rec.emit, settingsPath), rec
+	return NewMessagingService(mgr, slog.New(slog.NewTextHandler(io.Discard, nil)), rec.emit, settingsPath, nil), rec
 }
 
 // newConnectedServiceStack builds a connected MessagingService the way main.go
@@ -80,7 +81,7 @@ func newConnectedServiceStack(t *testing.T, behaviorJSON string) (*connections.M
 			}
 		}
 	})
-	svc = NewMessagingService(mgr, log, rec.emit, settingsPath)
+	svc = NewMessagingService(mgr, log, rec.emit, settingsPath, nil)
 
 	store := connections.NewStore(reg)
 	if err := store.Save(context.Background(), connections.ContextForm{Name: "svc", URL: localServerURL}, 0); err != nil {
@@ -410,4 +411,114 @@ func TestServiceFormJSONPins(t *testing.T) {
 	if back.Subject != "s" || string(back.Payload) != "p" || back.TimeoutMs != 7 || back.JetStream {
 		t.Fatalf("PubForm round-trip = %+v", back)
 	}
+}
+
+// TestServiceDataPlaneRoutesViaHub: hub active → session:msgs batches arrive
+// over the loopback WS and NEVER through the wails emit recorder. The stack
+// construction mirrors newConnectedServiceStack (service_test.go:58) with the
+// hub added. Add imports if absent: "encoding/json",
+// "github.com/coder/websocket".
+func TestServiceDataPlaneRoutesViaHub(t *testing.T) {
+	requireLocalServer(t)
+	settingsPath := filepath.Join(t.TempDir(), "missing-settings.json")
+	reg := natscontext.NewRegistry(natscontext.NewFileBackendAt(t.TempDir()))
+	rec := newEmitRecorder()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	hub := NewMsgHub(log)
+	if _, err := hub.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hub.Close() })
+	url, token := hub.DataChannel()
+
+	got := make(chan []MsgOut, 4)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	conn, _, err := websocket.Dial(dialCtx, url+"?token="+token, nil)
+	dialCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	// The hub registers the client after Accept returns server-side; wait so
+	// the session's first batch cannot be broadcast to zero clients.
+	regDeadline := time.Now().Add(2 * time.Second)
+	for hub.clientCount() == 0 {
+		if time.Now().After(regDeadline) {
+			t.Fatal("hub client never registered")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	go func() {
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, b, err := conn.Read(ctx)
+			cancel()
+			if err != nil {
+				return
+			}
+			var batch []MsgOut
+			if json.Unmarshal(b, &batch) == nil {
+				got <- batch
+			}
+		}
+	}()
+
+	var svc *MessagingService
+	mgr := connections.NewManager(reg, log, func(name string, data any) {
+		rec.emit(name, data)
+		if name == connections.EventConnState && svc != nil {
+			if ev, ok := data.(connections.StateEvent); ok {
+				svc.Sessions.NotifyConnState(ev)
+			}
+		}
+	})
+	svc = NewMessagingService(mgr, log, rec.emit, settingsPath, hub)
+
+	store := connections.NewStore(reg)
+	if err := store.Save(context.Background(), connections.ContextForm{Name: "svc", URL: localServerURL}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Connect(context.Background(), "svc"); err != nil {
+		t.Fatal(err)
+	}
+	waitManagerConnected(t, mgr, 10*time.Second)
+	t.Cleanup(func() { _ = store.Delete(context.Background(), "svc") })
+	t.Cleanup(mgr.Disconnect)
+	t.Cleanup(svc.Sessions.CloseAll)
+
+	subject := "dp.route." + uniqueSuffix()
+	st, err := svc.CreateSession(SessionSpec{Subject: subject})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if res := svc.Publish(PubForm{Subject: subject, Payload: []byte("hello dp")}); !res.OK {
+		t.Fatalf("Publish: %+v", res)
+	}
+	select {
+	case batch := <-got:
+		if len(batch) == 0 || batch[0].Subject != subject {
+			t.Fatalf("bad batch via hub: %+v", batch)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no batch via hub")
+	}
+	if n := rec.msgCount(st.ID); n != 0 {
+		t.Fatalf("session:msgs leaked to wails emit: %d batches", n)
+	}
+}
+
+// TestServiceDataPlaneFallsBackWithoutHub: nil hub (legacy path) →
+// session:msgs still arrives via emit, exactly as before this plan.
+func TestServiceDataPlaneFallsBackWithoutHub(t *testing.T) {
+	_, svc, rec := newConnectedServiceStack(t, "")
+	subject := "dp.fallback." + uniqueSuffix()
+	st, err := svc.CreateSession(SessionSpec{Subject: subject})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if res := svc.Publish(PubForm{Subject: subject, Payload: []byte("x")}); !res.OK {
+		t.Fatalf("Publish: %+v", res)
+	}
+	waitEmitted(t, rec, st.ID, 1, 10*time.Second)
 }

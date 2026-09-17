@@ -98,6 +98,12 @@ type SessionManager struct {
 	mgr  *connections.Manager
 	log  *slog.Logger
 	emit func(name string, data any)
+	// dataEmit is the data-plane sink for session:msgs batches ([]MsgOut,
+	// §7.1.3). Non-nil routes batches off the wails event pipeline (loopback
+	// WS hub); nil falls back to emit(EventSessionMsgs, ...) — the legacy
+	// path, which also keeps direct newSession/NewSessionManager call sites
+	// (tests) simple. Control events (session:state) always use emit.
+	dataEmit func(any)
 
 	defBuf  int
 	defPush PushMode
@@ -113,10 +119,11 @@ type SessionManager struct {
 }
 
 // NewSessionManager returns a manager over mgr. A nil log discards output, a
-// nil emit turns events into no-ops, defaultBuf <= 0 falls back to the spec
-// default (10000), and a defaultPush other than PushBatch falls back to
-// PushRealtime (spec: realtime is the global default).
-func NewSessionManager(mgr *connections.Manager, log *slog.Logger, emit func(name string, data any), defaultBuf int, defaultPush PushMode) *SessionManager {
+// nil emit turns events into no-ops, a nil dataEmit routes session:msgs
+// batches through emit (legacy wails-event data plane), defaultBuf <= 0 falls
+// back to the spec default (10000), and a defaultPush other than PushBatch
+// falls back to PushRealtime (spec: realtime is the global default).
+func NewSessionManager(mgr *connections.Manager, log *slog.Logger, emit func(name string, data any), dataEmit func(any), defaultBuf int, defaultPush PushMode) *SessionManager {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -133,6 +140,7 @@ func NewSessionManager(mgr *connections.Manager, log *slog.Logger, emit func(nam
 		mgr:      mgr,
 		log:      log,
 		emit:     emit,
+		dataEmit: dataEmit,
 		defBuf:   defaultBuf,
 		defPush:  defaultPush,
 		sessions: make(map[string]*session),
@@ -186,7 +194,7 @@ func (m *SessionManager) CreateSession(ctx context.Context, spec SessionSpec) (S
 		return SessionState{}, ErrManagerClosed
 	}
 	id := fmt.Sprintf("sub-%d", m.counter.Add(1))
-	s := newSession(id, spec.Subject, spec.JSPosition, push, buf, spec.HeaderFilters, m.log, m.emit)
+	s := newSession(id, spec.Subject, spec.JSPosition, push, buf, spec.HeaderFilters, m.log, m.emit, m.dataEmit)
 	m.sessions[id] = s
 	m.mu.Unlock()
 
@@ -461,7 +469,7 @@ type session struct {
 	log      *slog.Logger
 }
 
-func newSession(id, subject string, js *JSPosition, mode PushMode, buf int, headerFilters map[string]string, log *slog.Logger, emit func(name string, data any)) *session {
+func newSession(id, subject string, js *JSPosition, mode PushMode, buf int, headerFilters map[string]string, log *slog.Logger, emit func(name string, data any), dataEmit func(any)) *session {
 	s := &session{
 		id:            id,
 		subject:       subject,
@@ -475,7 +483,11 @@ func newSession(id, subject string, js *JSPosition, mode PushMode, buf int, head
 		log:           log,
 	}
 	s.pusher = newPusher(mode, func(batch []MsgOut) {
-		emit(EventSessionMsgs, batch) // payload: []MsgOut — the §7.1.3 wire shape
+		if dataEmit != nil {
+			dataEmit(batch) // payload: []MsgOut — the §7.1.3 wire shape (data plane: hub or legacy emit; m6-perf §12.3)
+			return
+		}
+		emit(EventSessionMsgs, batch)
 	})
 	s.throttle = newStateThrottle(stateThrottleInterval, s.snapshot, emit)
 	return s

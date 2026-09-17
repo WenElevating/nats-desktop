@@ -63,7 +63,7 @@ func newStressStack(t *testing.T) (*SessionManager, *stressEmit) {
 			sm.NotifyConnState(ev) // main.go Task 7 side-band wiring
 		}
 	})
-	sm = NewSessionManager(mgr, log, e.emit, 0, PushRealtime)
+	sm = NewSessionManager(mgr, log, e.emit, nil, 0, PushRealtime)
 
 	store := connections.NewStore(reg)
 	if err := store.Save(context.Background(), connections.ContextForm{Name: "stress", URL: localServerURL}, 0); err != nil {

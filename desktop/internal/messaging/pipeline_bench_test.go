@@ -70,6 +70,7 @@ func BenchmarkHeaderFilterPipeline(b *testing.B) {
 		map[string]string{"Env": "prod", "Svc": "orders"},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		func(string, any) {}, // noop emit: pure deliver cost
+		nil,                  // nil dataEmit: legacy emit path (the noop above)
 	)
 	m := &nats.Msg{
 		Subject: "bench.filter.a",
