@@ -30,13 +30,15 @@
 - Create: `desktop/internal/messaging/wshub.go` — loopback WS hub: auth, fanout, bounded per-client buffers, lifecycle. One responsibility: data-plane transport.
 - Create: `desktop/internal/messaging/wshub_test.go` — hub unit tests (auth/fanout/overflow/close/loopback).
 - Modify: `desktop/internal/messaging/service.go:62,80` — constructor gains `hub *MsgHub`; builds `dataEmit` closure; `NewSessionManager` call gains the extra param; adds `DataChannel()` binding method + `DataChannelInfo` type.
-- Modify: `desktop/internal/messaging/sessions.go:477-479` — pusher emit closure uses `dataEmit` instead of `emit`; `SessionManager`/factory thread the new param.
-- Modify: `desktop/internal/messaging/service_test.go` + any test helper constructing the service (`newConnectedServiceStack`) — pass `nil` hub (fallback path) plus new hub-routed tests.
+- Modify: `desktop/internal/messaging/sessions.go:477-479` — pusher emit closure uses `dataEmit` instead of `emit`; `SessionManager`/factory thread the new param (nil `dataEmit` falls back to `emit`, so `newSession` test call sites stay simple).
+- Modify: `desktop/internal/messaging/service_test.go:79` (`newConnectedServiceStack` passes `nil` hub) + new hub-routed tests.
+- Modify: `desktop/internal/messaging/sessions_test.go:204,820,1447`, `desktop/internal/messaging/sessions_stress_test.go:66`, `desktop/internal/messaging/pipeline_bench_test.go:69` — `newSession`/`NewSessionManager` call sites gain the `dataEmit` arg (`nil`, or a recording sink where the test asserts emissions).
 - Modify: `desktop/main.go:109` — construct + start hub, `defer hub.Close()`, pass into constructor.
 - Create: `desktop/frontend/src/lib/msgChannel.ts` — WS connect/reconnect/close wrapper (data plane).
 - Create: `desktop/frontend/tests/msg-channel.test.ts` — channel unit tests (fake WebSocket).
 - Modify: `desktop/frontend/src/features/messages/useSessions.ts:150` — replace `Events.On("session:msgs")` with `connectMsgChannel`.
-- Modify: `desktop/frontend/tests/messages-sessions.test.tsx`, `messages-sessions-filter.test.tsx`, `messages-perf.test.ts`, `tests/bench/sessions.bench.ts` — switch from `runtime.handlers.get("session:msgs")` firing to msgChannel mock firing.
+- Modify: `desktop/frontend/tests/messages-sessions.test.tsx`, `messages-sessions-filter.test.tsx`, `messages-sessions-coalesce.test.tsx` (its `fireMsgs` helper + bindings mock), `messages-perf.test.ts` (bindings mock gains `DataChannel`) — switch from `runtime.handlers.get("session:msgs")` firing to msgChannel mock firing. `tests/bench/sessions.bench.ts` needs NO change (drives `applyMsgsBatch` directly).
+- Modify: `desktop/frontend/src/lib/bindings.ts:33-43` — hand-maintained re-export surface gains `DataChannel` (regen does NOT touch this file).
 - Regen: `desktop/frontend/bindings/` — after `DataChannel()` is added.
 
 ---
@@ -166,6 +168,12 @@ func TestMsgHubOverflowDisconnectsSlowClient(t *testing.T) {
 	// not block and not buffer without bound (leak-A contract).
 	for i := 0; i < 200; i++ {
 		h.BroadcastData(map[string]int{"i": i})
+	}
+	// Disconnect is asynchronous (`go h.remove(c)`); poll instead of asserting
+	// synchronously.
+	deadline = time.Now().Add(2 * time.Second)
+	for h.clientCount() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	if h.clientCount() != 0 {
 		t.Fatalf("slow client must be disconnected, clients=%d", h.clientCount())
@@ -469,11 +477,22 @@ func TestServiceDataPlaneRoutesViaHub(t *testing.T) {
 	url, token := hub.DataChannel()
 
 	got := make(chan []MsgOut, 4)
-	conn, _, err := websocket.Dial(context.Background(), url+"?token="+token, nil)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	conn, _, err := websocket.Dial(dialCtx, url+"?token="+token, nil)
+	dialCancel()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	// The hub registers the client after Accept returns server-side; wait so
+	// the session's first batch cannot be broadcast to zero clients.
+	regDeadline := time.Now().Add(2 * time.Second)
+	for hub.clientCount() == 0 {
+		if time.Now().After(regDeadline) {
+			t.Fatal("hub client never registered")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	go func() {
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -558,7 +577,7 @@ Existing-helper changes required by the new 5th constructor param: in `newConnec
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd desktop && go test ./internal/messaging/ -run 'TestDataPlane' -v`
-Expected: FAIL — `newConnectedServiceStackWithHub` undefined / constructor arity mismatch
+Expected: COMPILE ERROR — `too many arguments in call to NewMessagingService` (the new tests pass 5 args; the current signature at service.go:62 takes 4)
 
 - [ ] **Step 3: Implement**
 
@@ -606,17 +625,27 @@ func (s *MessagingService) DataChannel() DataChannelInfo {
 
 Add field `hub *MsgHub` to the MessagingService struct (set in the constructor: `s.hub = hub`).
 
-sessions.go — `NewSessionManager(mgr, log, emit, dataEmit, defBuf, defPush)` (new param after emit; store as field `dataEmit func(any)` on SessionManager); the session factory's pusher closure (lines 477-479) becomes:
+sessions.go — `NewSessionManager(mgr, log, emit, dataEmit, defBuf, defPush)` (new param after emit; store as field `dataEmit func(any)` on SessionManager). `newSession` (free function at sessions.go:464, called from `CreateSession` at :189) gains the same param; its pusher closure (lines 477-479) becomes:
 
 ```go
 	s.pusher = newPusher(mode, func(batch []MsgOut) {
-		dataEmit(batch) // payload: []MsgOut — the §7.1.3 wire shape (data plane: hub or legacy emit; m6-perf §12.3)
+		if dataEmit != nil {
+			dataEmit(batch) // payload: []MsgOut — the §7.1.3 wire shape (data plane: hub or legacy emit; m6-perf §12.3)
+			return
+		}
+		emit(EventSessionMsgs, batch)
 	})
 ```
 
-(`dataEmit` is captured exactly where `emit` was captured — thread it through the same factory path `emit` takes today. `stateThrottle` at line 480 keeps `emit`: state is control-plane and stays on wails events.)
+(nil `dataEmit` → legacy emit, so existing `newSession` call sites can pass `nil`; `stateThrottle` at line 480 keeps `emit`: state is control-plane and stays on wails events.)
 
-Update existing test helper(s): `newConnectedServiceStack` passes `nil` for the new param (fallback mode — existing tests keep passing unchanged).
+Update every `newSession`/`NewSessionManager` call site the new param touches — pass `nil` unless the test asserts emissions:
+- `sessions_test.go:204` (`newSessionStackRec`), `:820` (`TestSessionInvalidSubject`), `:1447` (`TestSessionReconnectResubscribes`)
+- `sessions_stress_test.go:66`
+- `pipeline_bench_test.go:69` (direct `newSession` call — if the bench asserts emissions, pass a recording sink; otherwise `nil`)
+- `service_test.go:79` — `newConnectedServiceStack` passes hub `nil` AND `NewSessionManager` gains `dataEmit` from Task 2's constructor change (the service builds `dataEmit` itself, so the helper only adds the 5th service arg `nil`).
+
+Run `go build ./... && go vet ./...` to prove no call site was missed before running tests.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -671,7 +700,18 @@ with:
 - [ ] **Step 2: Regenerate bindings**
 
 Run: `cd desktop && wails3 generate bindings -ts -clean=true`
-Expected: `frontend/bindings/...` gains `DataChannel` on the messaging service; diff shows ONLY this addition (interface-mode nilables `| null`). If the diff shows wholesale reformatting, STOP and check the generator flags against CONTRIBUTING.md:21 — the committed tree must not churn.
+Expected: `frontend/bindings/...` gains `DataChannel` on the messaging service; the diff shows ONLY this addition. If the diff shows wholesale reformatting, STOP and check the generator flags against CONTRIBUTING.md:21 — the committed tree must not churn. (`DataChannelInfo{URL, Token string}` fields are non-pointer without omitempty, so the generated model should read `"url": string; "token": string` — plain types, not `| null`.)
+
+- [ ] **Step 2b: Re-export the binding**
+
+`src/lib/bindings.ts:33-43` is hand-maintained (regen does NOT touch it) — add `DataChannel` to the messaging re-export block and `type DataChannelInfo` to the models re-exports (lines 47-57):
+
+```ts
+// messaging block gains:
+  DataChannel,
+// models block gains:
+  type DataChannelInfo,
+```
 
 - [ ] **Step 3: Build + smoke**
 
@@ -681,7 +721,7 @@ Expected: clean build, clean vet.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add desktop/main.go desktop/frontend/bindings/
+git add desktop/main.go desktop/frontend/bindings/ desktop/frontend/src/lib/bindings.ts
 git commit -m "feat(app): wire MsgHub lifecycle + DataChannel binding (leak B bypass, part 3)"
 ```
 
@@ -904,31 +944,39 @@ with:
     // Data plane (m6-perf §12.3): §7.1.3 batches ride the loopback WS
     // channel; the wails event path no longer carries message batches.
     // session:state below remains a wails event (control plane).
-    const dc = DataChannel();
-    const channel = dc.url && dc.token
-      ? connectMsgChannel(dc.url, dc.token, (data) => {
+    // DataChannel() is a $CancellablePromise like every binding — resolve
+    // it; do NOT treat it as synchronous.
+    let channel: MsgChannel | null = null;
+    DataChannel()
+      .then((dc) => {
+        if (!alive || !dc?.url || !dc?.token) return;
+        channel = connectMsgChannel(dc.url, dc.token, (data) => {
           bufferMsgs(data);
           scheduleFlush();
-        })
-      : null;
+        });
+      })
+      .catch(() => {
+        /* endpoint unavailable: live frames pause; counters keep flowing
+           via session:state and §6.4's no-replay-on-resume covers the UI */
+      });
 ```
 
-and the effect cleanup (line ~187): replace `offMsgs();` with `channel?.close();`.
+and the effect cleanup (line ~187): replace `offMsgs();` with `channel?.close();` (the `alive = false` already present guards the async resolve against post-unmount construction).
 
 Imports at the top of the file: add `DataChannel` to the existing bindings import (the same import statement that already brings in `ListSessions`), and add:
 
 ```ts
-import { connectMsgChannel } from "@/lib/msgChannel";
+import { connectMsgChannel, type MsgChannel } from "@/lib/msgChannel";
 ```
 
-(`dc.url && dc.token` guards the interface-mode nilables and the hub-absent zero value; in that case no channel is opened — sessions still work, only live message frames pause, and §6.4's no-replay-on-resume semantics make that loss invisible to counters via `session:state`.)
+(`!dc?.url || !dc?.token` guards the hub-absent zero value; in that case no channel is opened — sessions still work, only live message frames pause, and §6.4's no-replay-on-resume semantics make that loss invisible to counters via `session:state`.)
 
 `sessionsLogic.ts` wire-shape comments (§7.1.3) stay valid — the WS frame payload IS the old `e.data`.
 
 - [ ] **Step 2: Update the test mocks**
 
-In `tests/messages-sessions.test.tsx` and `messages-sessions-filter.test.tsx`:
-- Add to the existing bindings mock: `DataChannel: () => ({ url: "ws://127.0.0.1:1/messaging/data", token: "test-token" })`.
+In `tests/messages-sessions.test.tsx`, `messages-sessions-filter.test.tsx`, AND `messages-sessions-coalesce.test.tsx` (its `fireMsgs` helper at lines 61-64 fires `handlers.get("session:msgs")`), AND `messages-perf.test.ts` (its bindings mock at lines 33-42 must gain `DataChannel` or the suite crashes on the undefined call):
+- Add to the existing bindings mock (async — the binding is a promise): `DataChannel: async () => ({ url: "ws://127.0.0.1:1/messaging/data", token: "test-token" })`.
 - Add a hoisted channel mock and a fire helper replacing `runtime.handlers.get("session:msgs")({ data })`:
 
 ```ts
@@ -944,8 +992,19 @@ vi.mock("../src/lib/msgChannel", () => ({
 // fire: channel.onData?.(batch)   // batch === old e.data
 ```
 
-- Replace every `runtime.handlers.get("session:msgs")(…)` call with `channel.onData?.(…)`.
-- `messages-perf.test.ts` and `tests/bench/sessions.bench.ts`: same substitution where they drive `session:msgs` (perf/bench drive `applyMsgsBatch`/buffers directly where possible — only the wiring-level entry points change).
+- Replace every `runtime.handlers.get("session:msgs")(…)` call with `channel.onData?.(…)` in all four files.
+- `tests/messages-sessions.test.tsx:379-389` (unmount test) asserts wails subscription lifecycle — rewrite to channel lifecycle:
+
+```ts
+    // before: expect(runtime.handlers.has("session:msgs")).toBe(true);
+    expect(channel.onData).not.toBeNull();
+    // before: expect(runtime.offs).toContain("session:msgs");
+    unmount();
+    expect(channel.onData).toBeNull();           // mock close() ran
+    expect(runtime.offs).toEqual(["session:state"]); // only the control plane remains
+```
+
+- `tests/bench/sessions.bench.ts`: NO change (drives `applyMsgsBatch` directly; excluded from vitest run).
 
 - [ ] **Step 3: Run the frontend suite**
 
