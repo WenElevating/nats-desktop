@@ -94,12 +94,16 @@ func findStream(streams []StreamSummary, name string) *StreamSummary {
 // messages. The pinned v2.15-preview server maintains the STREAM.LIST fast
 // state counters via an async flush loop (filestore flushStreamStateLoop), so
 // a count read right after publish+Flush can lag; STREAM INFO (GetStreamDetail)
-// and PurgeExt counts are synchronous and need no polling.
+// and PurgeExt counts are synchronous and need no polling. The name doubles as
+// the server-side filter: filters apply before the 500 cap, so the sought
+// stream stays reachable even when the shared LocalServer hosts >500 streams
+// (a 0-msg stream would otherwise be truncated away by the messages-desc cap).
+// Fresh-server callers are unaffected — the stream matches its own name either way.
 func waitListMessages(t *testing.T, svc *JetAdminService, name string, want uint64) *StreamSummary {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		list := svc.ListStreams()
+		list := svc.ListStreams(name)
 		if !list.Ok() {
 			t.Fatalf("list failed: %+v", list)
 		}
@@ -140,13 +144,13 @@ func TestStreamLifecycle(t *testing.T) {
 	if res := svc.CreateStream(form); !res.Ok() {
 		t.Fatalf("create: %+v", res)
 	}
-	list := svc.ListStreams()
+	list := svc.ListStreams("")
 	if !list.Ok() || len(list.Streams) != 1 || list.Streams[0].Name != "ORDERS" {
 		t.Fatalf("list: %+v", list)
 	}
 	// 发布 3 条 → 列表计数（STREAM.LIST 计数异步刷新，见 waitListMessages）
 	publishN(t, svc, "orders.a", 3)
-	list = svc.ListStreams()
+	list = svc.ListStreams("")
 	if list.Streams[0].Name != "ORDERS" {
 		t.Fatalf("expected ORDERS, got %+v", list)
 	}
@@ -193,7 +197,7 @@ func TestStreamLifecycle(t *testing.T) {
 	if res := svc.DeleteStream("ORDERS_COPY"); !res.Ok() {
 		t.Fatalf("delete: %+v", res)
 	}
-	list = svc.ListStreams()
+	list = svc.ListStreams("")
 	if len(list.Streams) != 1 { // 只剩 ORDERS
 		t.Fatalf("expected 1 stream after delete, got %d", len(list.Streams))
 	}
@@ -205,7 +209,7 @@ func TestListStreamsNotFoundAndUnavailable(t *testing.T) {
 		t.Fatalf("expected not_found, got %+v", d.CallResult)
 	}
 	svc2 := newAdminWithPrefix(t, testutil.StartJSServer(t), "$WRONG.API") // JSParams 替身返回错误前缀
-	list := svc2.ListStreams()
+	list := svc2.ListStreams("")
 	if list.UnavailableReason != ReasonNoResponders || len(list.Streams) != 0 {
 		t.Fatalf("expected unavailable guidance, got %+v", list)
 	}
@@ -237,7 +241,7 @@ func TestStreamLifecycleLocalServer(t *testing.T) {
 	if res := svc.CreateStream(form); !res.Ok() {
 		t.Fatalf("create: %+v", res)
 	}
-	list := svc.ListStreams()
+	list := svc.ListStreams(suffix) // suffix 过滤先于封顶：共享服务器 >500 流时自己的流仍可达
 	if !list.Ok() || findStream(list.Streams, name) == nil {
 		t.Fatalf("list missing %s: %+v", name, list)
 	}
@@ -287,7 +291,7 @@ func TestStreamLifecycleLocalServer(t *testing.T) {
 	if res := svc.DeleteStream(copyName); !res.Ok() {
 		t.Fatalf("delete: %+v", res)
 	}
-	list = svc.ListStreams()
+	list = svc.ListStreams(suffix) // 同上：suffix 过滤保证自己的流不被 500 封顶截掉
 	if !list.Ok() || findStream(list.Streams, name) == nil || findStream(list.Streams, copyName) != nil {
 		t.Fatalf("expected %s to remain and %s gone: %+v", name, copyName, list)
 	}
@@ -299,7 +303,7 @@ func TestStreamLifecycleLocalServer(t *testing.T) {
 // only signal (spec §8.5.2 closed set).
 func TestListStreamsUnavailableErrorCode(t *testing.T) {
 	svc := newAdminWithPrefix(t, testutil.StartJSServer(t), "$WRONG.API") // JSParams 替身返回错误前缀
-	list := svc.ListStreams()
+	list := svc.ListStreams("")
 	if list.Ok() {
 		t.Fatalf("expected unavailable result, got %+v", list)
 	}
@@ -338,7 +342,7 @@ func TestListStreamsTimeoutReason(t *testing.T) {
 	if err := nc.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	list := svc.ListStreams()
+	list := svc.ListStreams("")
 	if list.Ok() || list.UnavailableReason != ReasonTimeout {
 		t.Fatalf("expected timeout guidance, got %+v", list)
 	}
@@ -410,9 +414,56 @@ func TestCopyStreamMirrorSource(t *testing.T) {
 func TestListStreamsUnavailableLocalServer(t *testing.T) {
 	nc := testutil.ConnectLocalServer(t)
 	svc := newAdminConnWithPrefix(t, nc, "$WRONG.API")
-	list := svc.ListStreams()
+	list := svc.ListStreams("")
 	if list.UnavailableReason != ReasonNoResponders || len(list.Streams) != 0 {
 		t.Fatalf("expected unavailable guidance, got %+v", list)
+	}
+}
+
+// TestListStreamsCapSortFilter uses a FRESH per-test server (newAdmin +
+// testutil.StartJSServer, same fixture as TestStreamLifecycle) so exact totals
+// and fixed names are valid — the shared 4333 server carries the 10k-stream
+// Task-6 dataset and other tests' debris.
+func TestListStreamsCapSortFilter(t *testing.T) {
+	svc := newAdmin(t, testutil.StartJSServer(t))
+	// 7 streams: msg counts 0/10/.../60, names cap-s-0..cap-s-6, subjects ["cap-s-N.>"]
+	for i := 0; i < 7; i++ {
+		name := fmt.Sprintf("cap-s-%d", i)
+		if res := svc.CreateStream(StreamForm{
+			Name: name, Subjects: []string{fmt.Sprintf("cap-s-%d.>", i)},
+			Storage: "file", Retention: "limits",
+		}); !res.Ok() {
+			t.Fatalf("create %s: %+v", name, res)
+		}
+		publishN(t, svc, fmt.Sprintf("cap-s-%d.a", i), i*10) // i*10 msgs（照抄同文件既有 publishN 写法）
+	}
+	// STREAM.LIST 计数异步刷新（见 waitListMessages）：等各流计数到位后排序断言
+	// 才确定。必须在缩容**前**等齐——cap=5 的截断面只有前 5 名，末位流永远不在。
+	for i := 0; i < 7; i++ {
+		waitListMessages(t, svc, fmt.Sprintf("cap-s-%d", i), uint64(i*10))
+	}
+	listStreamsCap = 5 // 包级 var，测试缩容（直接赋值，非 svc 字段）
+	t.Cleanup(func() { listStreamsCap = 500 })
+	res := svc.ListStreams("")
+	if !res.Ok() {
+		t.Fatalf("ListStreams: %+v", res)
+	}
+	if !res.Truncated || res.Total != 7 {
+		t.Fatalf("Truncated=%v Total=%d, want true/7", res.Truncated, res.Total)
+	}
+	if len(res.Streams) != 5 {
+		t.Fatalf("len=%d want 5", len(res.Streams))
+	}
+	for i := 1; i < len(res.Streams); i++ {
+		if res.Streams[i-1].Messages < res.Streams[i].Messages {
+			t.Fatalf("not sorted desc: %v", res.Streams)
+		}
+	}
+	// filter: server-side, matches name or subjects substring, case-insensitive
+	fres := svc.ListStreams("CAP-S-1") // 大写也能命中（大小写不敏感）
+	if !fres.Ok() || fres.Total != 1 || fres.Truncated ||
+		len(fres.Streams) != 1 || fres.Streams[0].Name != "cap-s-1" {
+		t.Fatalf("filtered: %+v", fres)
 	}
 }
 

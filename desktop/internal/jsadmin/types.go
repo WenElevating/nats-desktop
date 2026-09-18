@@ -123,8 +123,15 @@ type StreamSourceForm struct {
 type ListStreamsResult struct {
 	CallResult
 	Streams           []StreamSummary `json:"streams"`            // 失败时 nil
+	Total             int             `json:"total"`              // 筛选后总数（封顶前）
+	Truncated         bool            `json:"truncated"`          // Total > listStreamsCap
 	UnavailableReason string          `json:"unavailable_reason"` // 非空 → 前端渲染指引面板
 }
+
+// listStreamsCap bounds the ListStreams wire response (m6-perf §12.2: a 10k-
+// stream list is 2-4MB every poll and ratchets the WebView2 browser process).
+// Package var so tests can shrink it.
+var listStreamsCap = 500
 
 type PurgeResult struct {
 	CallResult

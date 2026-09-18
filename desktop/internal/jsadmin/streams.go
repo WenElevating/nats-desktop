@@ -3,6 +3,7 @@ package jsadmin
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ func (s *JetAdminService) handlesWithJet() (mgr *jsm.Manager, js jetstream.JetSt
 func isNoResponders(err error) bool { return errors.Is(err, nats.ErrNoResponders) }
 func isTimeout(err error) bool      { return errors.Is(err, context.DeadlineExceeded) }
 
-func (s *JetAdminService) ListStreams() ListStreamsResult {
+func (s *JetAdminService) ListStreams(filter string) ListStreamsResult {
 	mgr, _, res := s.handles()
 	if !res.Ok() {
 		// UnavailableReason 仅描述 JS 层不可用成因（no_responders/timeout/server）；
@@ -102,15 +103,45 @@ func (s *JetAdminService) ListStreams() ListStreamsResult {
 		}
 		return ListStreamsResult{CallResult: ClassifyError(err), UnavailableReason: reason}
 	}
-	out := make([]StreamSummary, 0, len(streams))
+	f := strings.ToLower(strings.TrimSpace(filter))
+	all := make([]StreamSummary, 0, len(streams))
 	for _, st := range streams {
 		info, err := st.LatestInformation()
 		if err != nil {
 			continue // 单流信息失败不拖垮整表（natscli missing 语义）
 		}
-		out = append(out, BuildStreamSummary(info.Config.Name, info.Config, info.State, info.Cluster))
+		sum := BuildStreamSummary(info.Config.Name, info.Config, info.State, info.Cluster)
+		if f != "" && !streamMatchesFilter(sum, f) {
+			continue
+		}
+		all = append(all, sum)
 	}
-	return ListStreamsResult{Streams: out}
+	// 消息数降序、名称升序定序（稳定，供截断语义与前端排序一致）
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Messages != all[j].Messages {
+			return all[i].Messages > all[j].Messages
+		}
+		return all[i].Name < all[j].Name
+	})
+	truncated := len(all) > listStreamsCap
+	total := len(all) // 截断前的存活总数（Total 语义）
+	if truncated {
+		all = all[:listStreamsCap]
+	}
+	return ListStreamsResult{Streams: all, Total: total, Truncated: truncated}
+}
+
+// streamMatchesFilter: §6.6 名称/subject 模糊匹配（大小写不敏感的子串）。
+func streamMatchesFilter(s StreamSummary, f string) bool {
+	if strings.Contains(strings.ToLower(s.Name), f) {
+		return true
+	}
+	for _, sub := range s.Subjects {
+		if strings.Contains(strings.ToLower(sub), f) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *JetAdminService) GetStreamDetail(name string) StreamDetail {

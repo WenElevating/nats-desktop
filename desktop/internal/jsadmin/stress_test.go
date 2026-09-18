@@ -69,7 +69,7 @@ func TestConcurrentStreamOpsLocalServer(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				if list := svc.ListStreams(); !list.Ok() && list.ErrorCode != CodeServer {
+				if list := svc.ListStreams(""); !list.Ok() && list.ErrorCode != CodeServer {
 					errCh <- fmt.Errorf("list: %s", list.Error)
 					return
 				}

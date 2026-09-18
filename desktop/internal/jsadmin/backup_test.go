@@ -399,7 +399,7 @@ func TestRestoreMalformedBackupJSON(t *testing.T) {
 		})
 	}
 	// 三种用例均未触达服务器：全新嵌入式服务器上不得出现任何流
-	if ls := svc.ListStreams(); !ls.Ok() || len(ls.Streams) != 0 {
+	if ls := svc.ListStreams(""); !ls.Ok() || len(ls.Streams) != 0 {
 		t.Fatalf("malformed restore must not create streams, got ok=%v n=%d err=%s", ls.Ok(), len(ls.Streams), ls.Error)
 	}
 }

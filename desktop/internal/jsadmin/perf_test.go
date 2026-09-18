@@ -39,7 +39,7 @@ func adminOver(t *testing.T, nc *nats.Conn) *JetAdminService {
 // failed run leaves no PERF*/CON* debris behind on the shared server).
 func cleanupStreams(t *testing.T, svc *JetAdminService, suffix string) {
 	t.Cleanup(func() {
-		list := svc.ListStreams()
+		list := svc.ListStreams(suffix) // suffix 过滤：共享服务器上只列出本 fixture 的残留
 		if !list.Ok() {
 			return
 		}
@@ -127,7 +127,7 @@ func TestStreamList500LocalServer(t *testing.T) {
 	}
 
 	start := time.Now()
-	list := svc.ListStreams()
+	list := svc.ListStreams("")
 	elapsed := time.Since(start)
 	if !list.Ok() || len(list.Streams) < 500 {
 		t.Fatalf("list: n=%d err=%v", len(list.Streams), list.Error)
@@ -146,13 +146,13 @@ func TestStreamList500LocalServer(t *testing.T) {
 func BenchmarkStreamListLocalServer(b *testing.B) {
 	nc := connectLocalServerTB(b)
 	svc := NewJetAdminService(&connStub{nc: nc}, nil, nil, "")
-	if list := svc.ListStreams(); !list.Ok() {
+	if list := svc.ListStreams(""); !list.Ok() {
 		b.Fatalf("warmup list: %+v", list)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if list := svc.ListStreams(); !list.Ok() {
+		if list := svc.ListStreams(""); !list.Ok() {
 			b.Fatalf("list: %+v", list)
 		}
 	}
