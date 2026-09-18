@@ -491,7 +491,7 @@ try {
           if (-not $script:lastAxKick -or ($nowKick - $script:lastAxKick).TotalMinutes -ge 10) {
             $script:lastAxKick = $nowKick
             Write-Log ("ax kick: CDP Accessibility.enable after {0} consecutive misses" -f $consecMiss)
-            & node (Join-Path $scriptDir "bin\cdp-ax.mjs") 2>&1 | Out-Null
+            & node (Join-Path $scriptDir "cdp-ax.mjs") 2>&1 | Out-Null
           }
         }
       }
