@@ -161,11 +161,13 @@ export function GetObjBucketDetail(name: string): $CancellablePromise<$models.Ob
 }
 
 /**
- * ListKeys 收集桶内全部键的最新元数据。MetaOnly 只取 meta 不取值（值由
- * GetKeyValues 批量补齐）；不用 UpdatesOnly——初始快照正是列表要的数据；
- * 不用 IgnoreDeletes——删除/清除标记键仍出现在列表（Operation=delete/purge，
- * §6.8「历史可查」浏览语义）。nil 哨兵表示初始快照结束，随即 Stop 释放
- * 服务端有序消费者。
+ * ListKeys 收集桶内键的最新元数据，交付面封顶 kvListKeysCap 条。MetaOnly 只取
+ * meta 不取值（值由 GetKeyValues 批量补齐）；不用 UpdatesOnly——初始快照正是
+ * 列表要的数据；不用 IgnoreDeletes——删除/清除标记键仍出现在列表
+ * （Operation=delete/purge，§6.8「历史可查」浏览语义）。nil 哨兵表示初始快照
+ * 结束，随即 Stop 释放服务端有序消费者。watcher 循环顺序固定：先哨兵判断、
+ * 再封顶判断（append 之前——还能读到下一条才确有更多，恰好 cap 键时
+ * truncated=false）、最后 append。
  */
 export function ListKeys(bucket: string): $CancellablePromise<$models.ListKeysResult> {
     return $Call.ByID(1128341107, bucket);

@@ -165,6 +165,16 @@ export interface ListKeysResult {
      */
     "error": string;
     "keys": KeyMeta[] | null;
+
+    /**
+     * 已读键数（MetaOnly 无法预知真实总数；截断时 = 已读键数）
+     */
+    "total": number;
+
+    /**
+     * 超过 kvListKeysCap 封顶，未列出的键存在
+     */
+    "truncated": boolean;
 }
 
 export interface ListObjectsResult {

@@ -196,6 +196,16 @@ export interface ListStreamsResult {
     "streams": StreamSummary[] | null;
 
     /**
+     * 筛选后总数（封顶前）
+     */
+    "total": number;
+
+    /**
+     * Total > listStreamsCap
+     */
+    "truncated": boolean;
+
+    /**
      * 非空 → 前端渲染指引面板
      */
     "unavailable_reason": string;

@@ -81,8 +81,8 @@ export function ListConsumers(stream: string): $CancellablePromise<$models.ListC
     return $Call.ByID(1975139201, stream);
 }
 
-export function ListStreams(): $CancellablePromise<$models.ListStreamsResult> {
-    return $Call.ByID(1500379901);
+export function ListStreams(filter: string): $CancellablePromise<$models.ListStreamsResult> {
+    return $Call.ByID(1500379901, filter);
 }
 
 export function PauseConsumer(stream: string, name: string, seconds: number): $CancellablePromise<$models.PauseResult> {
