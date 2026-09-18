@@ -116,7 +116,9 @@ type KeyMeta struct {
 
 type ListKeysResult struct {
 	CallResult
-	Keys []KeyMeta `json:"keys"`
+	Keys      []KeyMeta `json:"keys"`
+	Total     int       `json:"total"`     // 已读键数（MetaOnly 无法预知真实总数；截断时 = 已读键数）
+	Truncated bool      `json:"truncated"` // 超过 kvListKeysCap 封顶，未列出的键存在
 }
 
 // KeyValueOut: 批量值补齐的单键结果；缺失键 NotFound=true（键在列表后被删）。

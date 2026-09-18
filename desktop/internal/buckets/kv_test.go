@@ -282,6 +282,61 @@ func TestKvKeyLifecycle(t *testing.T) {
 	}
 }
 
+// TestListKeysCapTruncates 验证 ListKeys 封顶（leak B fix 2）：kvListKeysCap
+// 缩到 5（包级 var 直接赋值 + t.Cleanup 还原），12 键桶 → Truncated=true、
+// len(keys)=5；Total = 已读键数（MetaOnly watcher 无法预知真实总数，截断时
+// 只能如实报告已读部分，前端文案不引用具体总数）。
+func TestListKeysCapTruncates(t *testing.T) {
+	svc := newSvc(t, testutil.StartJSServer(t))
+	if res := svc.CreateKvBucket(KvBucketForm{Name: "CAP", Replicas: 1}); !res.Ok() {
+		t.Fatalf("create: %+v", res)
+	}
+	for i := 0; i < 12; i++ {
+		if r := svc.PutKey("CAP", fmt.Sprintf("cap-k-%02d", i), b64("v"), "put", 0); !r.Ok() {
+			t.Fatalf("put %d: %+v", i, r)
+		}
+	}
+	kvListKeysCap = 5
+	t.Cleanup(func() { kvListKeysCap = 1000 })
+	res := svc.ListKeys("CAP")
+	if !res.Ok() {
+		t.Fatalf("ListKeys: %+v", res)
+	}
+	if !res.Truncated {
+		t.Fatalf("Truncated=false, want true: %+v", res)
+	}
+	if res.Total != 5 || len(res.Keys) != 5 {
+		t.Fatalf("Total=%d len=%d, want 5/5", res.Total, len(res.Keys))
+	}
+}
+
+// TestListKeysCapExactAtCap 正好等于 cap 的桶必须 truncated=false：封顶判断
+// 在 append 之前（还能读到下一条才确有更多）、哨兵判断先于封顶判断——
+// 恰好 cap 键时哨兵先到达，不误标截断。
+func TestListKeysCapExactAtCap(t *testing.T) {
+	svc := newSvc(t, testutil.StartJSServer(t))
+	if res := svc.CreateKvBucket(KvBucketForm{Name: "EXACT", Replicas: 1}); !res.Ok() {
+		t.Fatalf("create: %+v", res)
+	}
+	for i := 0; i < 5; i++ {
+		if r := svc.PutKey("EXACT", fmt.Sprintf("exact-k-%02d", i), b64("v"), "put", 0); !r.Ok() {
+			t.Fatalf("put %d: %+v", i, r)
+		}
+	}
+	kvListKeysCap = 5
+	t.Cleanup(func() { kvListKeysCap = 1000 })
+	res := svc.ListKeys("EXACT")
+	if !res.Ok() {
+		t.Fatalf("ListKeys: %+v", res)
+	}
+	if res.Truncated {
+		t.Fatalf("Truncated=true at exactly cap, want false: %+v", res)
+	}
+	if res.Total != 5 || len(res.Keys) != 5 {
+		t.Fatalf("Total=%d len=%d, want 5/5", res.Total, len(res.Keys))
+	}
+}
+
 // TestKvKeyLifecycleLocalServer 在长驻本地服务器上复跑键全链路（桶名带
 // uniqueSuffix——共享服务器承载其他桶，但桶级流序列隔离，修订断言不受影响）。
 func TestKvKeyLifecycleLocalServer(t *testing.T) {
