@@ -25,6 +25,9 @@ export interface KeyListProps {
   pageSize: number;
   filter: string;
   loading: boolean;
+  /** ListKeys hit the 1000-key wire cap → banner above the table (leak B
+   * fix 2). */
+  truncated?: boolean;
   selectedKey: string | null;
   onFilterChange: (s: string) => void;
   onPageChange: (p: number) => void;
@@ -49,6 +52,7 @@ export function KeyList({
   pageSize,
   filter,
   loading,
+  truncated,
   selectedKey,
   onFilterChange,
   onPageChange,
@@ -73,6 +77,16 @@ export function KeyList({
 
   return (
     <section data-testid="kv-key-list" className="flex min-h-0 flex-col rounded-md border border-border">
+      {/* Leak B fix 2: the server delivered only the first 1000 keys of the
+          bucket — say so instead of silently hiding the tail. */}
+      {truncated && (
+        <p
+          data-testid="kv-truncated-banner"
+          className="shrink-0 border-b border-border bg-[var(--warn-soft)] px-3 py-1.5 text-xs text-[var(--fg-muted)]"
+        >
+          {t("kv.truncatedKeys")}
+        </p>
+      )}
       {/* Toolbar: name filter + page size + put entry */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <h3 className="text-sm font-medium">{t("kv.keys.title")}</h3>

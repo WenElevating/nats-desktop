@@ -399,6 +399,7 @@ export function KeyValuePage() {
               pageSize={api.pageSize}
               filter={api.filter}
               loading={api.keysLoading}
+              truncated={api.keysTruncated}
               selectedKey={api.selectedKey?.key ?? null}
               onFilterChange={api.setFilter}
               onPageChange={api.setPage}

@@ -120,6 +120,9 @@ export interface KvApi {
   detailLoading: boolean;
   keys: KeyMeta[];
   keysLoading: boolean;
+  /** ListKeys hit the 1000-key wire cap → the list shows the truncation
+   * banner (leak B fix 2). */
+  keysTruncated: boolean;
   filter: string;
   setFilter: (s: string) => void;
   page: number;
@@ -187,6 +190,7 @@ export function useKv(): KvApi {
   const [detailLoading, setDetailLoading] = useState(false);
   const [keys, setKeys] = useState<KeyMeta[]>([]);
   const [keysLoading, setKeysLoading] = useState(false);
+  const [keysTruncated, setKeysTruncated] = useState(false);
   const [filter, setFilterState] = useState("");
   const [page, setPageState] = useState(0);
   const [pageSize, setPageSizeState] = useState(50);
@@ -282,6 +286,7 @@ export function useKv(): KvApi {
             selectedRef.current = null;
             setSelected(null);
             setKeys([]);
+            setKeysTruncated(false);
             void fetchBuckets();
           } else {
             toast.error(t("kv.keysLoadFailed", { error: res.error || res.error_code }));
@@ -289,6 +294,7 @@ export function useKv(): KvApi {
           return;
         }
         setKeys([...(res?.keys ?? [])].sort(byKey));
+        setKeysTruncated(res?.truncated ?? false);
       } catch (err) {
         toast.error(t("kv.keysLoadFailed", { error: errText(err) }));
       } finally {
@@ -370,6 +376,7 @@ export function useKv(): KvApi {
     setSelectedKey(null);
     setHistory([]);
     setKeys([]);
+    setKeysTruncated(false);
     setPageValues(new Map());
     setPageState(0);
     setDetail(null);
@@ -444,6 +451,7 @@ export function useKv(): KvApi {
     setUnavailableReason("");
     setDetail(null);
     setKeys([]);
+    setKeysTruncated(false);
     setPageValues(new Map());
     setSelected(null);
     selectedRef.current = null;
@@ -705,6 +713,7 @@ export function useKv(): KvApi {
     detailLoading,
     keys,
     keysLoading,
+    keysTruncated,
     filter,
     setFilter,
     page: safePage,

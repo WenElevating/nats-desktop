@@ -128,13 +128,22 @@ export {
   GetKeyHistory,
   GetKeyValues,
   GetKvBucketDetail,
-  ListKeys,
   ListKvBuckets,
   PutKey,
   RevertKey,
   StopWatch,
   UpdateKvBucket,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/bucketservice.js";
+// Leak B fix 2 (KV keys cap): ListKeysResult gains total/truncated. The
+// generated tree still lacks the fields until the Task-5 regen, so the shim
+// widens the result locally; fields stay optional because the failure /
+// unavailable branches do not set them. (Same pattern as the ListStreams
+// shim above.)
+import { ListKeys as ListKeysGenerated } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/bucketservice.js";
+import type { ListKeysResult } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/buckets/models.js";
+export const ListKeys = ListKeysGenerated as (
+  name: string,
+) => Promise<ListKeysResult & { total?: number; truncated?: boolean }>;
 export type {
   BucketDetailResult,
   CreateWatchResult,

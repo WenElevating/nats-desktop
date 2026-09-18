@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act, within } from "@testing-library/react";
+import { render, screen, fireEvent, act, within, cleanup } from "@testing-library/react";
 import { it, expect, vi, beforeEach } from "vitest";
 import { KeyValuePage, matchBuckets } from "../src/features/kv/KeyValuePage";
 import { applyWatchEvent, type KvWatchEvent } from "../src/features/kv/useKv";
@@ -246,7 +246,12 @@ beforeEach(() => {
     form: detailForm(),
     created_ms: 0,
   } as never);
-  vi.mocked(ListKeys).mockResolvedValue({ ...ok, keys: [keyMeta("k-000")] } as never);
+  vi.mocked(ListKeys).mockResolvedValue({
+    ...ok,
+    keys: [keyMeta("k-000")],
+    total: 1,
+    truncated: false,
+  } as never);
   vi.mocked(GetKeyValues).mockResolvedValue({
     ...ok,
     values: [keyValue("k-000")],
@@ -1006,6 +1011,33 @@ it("key list: the page-size select refetches the page batch and the empty filter
   fireEvent.change(screen.getByTestId("kv-key-filter"), { target: { value: "nope" } });
   await flush();
   expect(screen.getByTestId("kv-keys-empty").textContent).toContain("No keys match");
+});
+
+// ---- Leak B fix 2 (part 4): KV keys truncation banner ----
+
+it("truncated ListKeys renders the kv-truncated-banner; an untruncated list renders none", async () => {
+  vi.mocked(ListKeys).mockResolvedValue({
+    ...ok,
+    keys: [keyMeta("k-000")],
+    total: 100_000,
+    truncated: true,
+  } as never);
+  await setup();
+  const banner = screen.getByTestId("kv-truncated-banner");
+  expect(banner.textContent).toContain("Showing first 1000 keys");
+  expect(banner.textContent).toContain("more not listed");
+
+  // The untruncated answer (the beforeEach default shape) carries no banner —
+  // no noise when the whole bucket is listed.
+  cleanup();
+  vi.mocked(ListKeys).mockResolvedValue({
+    ...ok,
+    keys: [keyMeta("k-000")],
+    total: 1,
+    truncated: false,
+  } as never);
+  await setup();
+  expect(screen.queryByTestId("kv-truncated-banner")).toBeNull();
 });
 
 // ---- KeyEditor: fresh-key entry + key validation ----
