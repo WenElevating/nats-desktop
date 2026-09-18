@@ -70,7 +70,6 @@ export {
   GetStreamDetail,
   GetStreamMessage,
   ListConsumers,
-  ListStreams,
   PauseConsumer,
   PickBackupDirectory,
   PreviewNext,
@@ -83,6 +82,17 @@ export {
   UpdateConsumer,
   UpdateStream,
 } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/jsadmin/jetadminservice.js";
+// Leak B fix 2 (list caps): the Go surface is now ListStreams(filter string)
+// and its result carries total/truncated. The generated tree still has the
+// old zero-arg signature until the Task-5 regen, so the shim re-types it
+// locally; fields stay optional because the failure/unavailable branches do
+// not set them. (Tests mock this module; runtime arg passing goes live with
+// the regen.)
+import { ListStreams as ListStreamsGenerated } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/jsadmin/jetadminservice.js";
+import type { ListStreamsResult } from "../../bindings/github.com/WenElevating/nats-desktop/desktop/internal/jsadmin/models.js";
+export const ListStreams = ListStreamsGenerated as (
+  filter: string,
+) => Promise<ListStreamsResult & { total?: number; truncated?: boolean }>;
 export type {
   BrowserMsg,
   BrowserPageRequest,

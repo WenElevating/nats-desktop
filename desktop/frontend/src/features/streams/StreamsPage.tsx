@@ -1,9 +1,8 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "../../app/i18n";
 import { useConnState } from "../../app/connstate";
 import { useConfirm } from "../../lib/confirm";
-import type { StreamSummary } from "../../lib/bindings";
 import { useStreams } from "./useStreams";
 import { StreamList } from "./StreamList";
 import { StreamDetail } from "./StreamDetail";
@@ -12,18 +11,6 @@ import { StreamMsgs } from "./StreamMsgs";
 import { BackupPanel, type BackupDirection } from "./BackupPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-/** Client-side filter (spec §6.6: immediate within 500 streams): substring
- * match on the stream name or any of its subjects, case-insensitive. */
-export function matchStreams(streams: StreamSummary[], query: string): StreamSummary[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return streams;
-  return streams.filter(
-    (s) =>
-      s.name.toLowerCase().includes(q) ||
-      (s.subjects ?? []).some((sub) => sub.toLowerCase().includes(q)),
-  );
-}
 
 const KNOWN_REASONS = ["no_responders", "timeout", "server"] as const;
 
@@ -54,6 +41,8 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
   const conn = useConnState();
   const api = useStreams();
   const { confirmL1, confirmNameMatch } = useConfirm();
+  // `query` is the immediate display value; api.setFilter debounces 300ms and
+  // then refetches server-side — filtering no longer happens client-side.
   const [query, setQuery] = useState("");
   const [form, setForm] = useState<{ open: boolean; mode: StreamFormMode }>({
     open: false,
@@ -127,7 +116,6 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
     [runOp, selectedName, confirmNameMatch, api],
   );
 
-  const filtered = useMemo(() => matchStreams(api.list, query), [api.list, query]);
   const connected = conn.state === "connected";
   const unavailable = api.unavailableReason !== "";
   const reasonKey = (KNOWN_REASONS as readonly string[]).includes(api.unavailableReason)
@@ -144,7 +132,10 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
             aria-label={t("streams.search")}
             placeholder={t("streams.search")}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              api.setFilter(e.target.value);
+            }}
             className="h-8"
           />
           <Button
@@ -198,10 +189,12 @@ export function StreamsPage({ onCreate, onRestore }: StreamsPageProps) {
           </div>
         ) : (
           <StreamList
-            streams={filtered}
+            streams={api.list}
             rates={api.rates}
             selected={api.selected}
             onSelect={api.select}
+            total={api.total}
+            truncated={api.truncated}
           />
         )}
       </aside>

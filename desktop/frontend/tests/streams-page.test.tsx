@@ -136,6 +136,10 @@ const listOk = (streams: StreamSummary[]) => ({
   error: "",
   streams,
   unavailable_reason: "",
+  // Leak B fix 2: ListStreamsResult carries the pre-cap survivor total and the
+  // truncation marker (top-500, messages desc).
+  total: streams.length,
+  truncated: false,
 });
 
 // ---- harness ----
@@ -266,7 +270,57 @@ it("replaces the table with the unavailable guidance panel (never an empty table
   expect(rows()).toHaveLength(0);
 });
 
-it("filters streams by name or subject substring", async () => {
+it("filters streams by name or subject substring via the server round-trip", async () => {
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
+  await flush();
+  expect(rows()).toHaveLength(3);
+
+  // Filtering is server-side now: after the 300ms debounce the refetch must
+  // carry the raw query, and the subset the server answers with is what
+  // renders — there is no client-side matchStreams anymore.
+  vi.mocked(ListStreams).mockResolvedValue(
+    listOk([summary({ name: "TELEMETRY", subjects: ["telemetry.#"] })]) as never,
+  );
+  fireEvent.change(screen.getByLabelText("Search streams"), {
+    target: { value: "telemetry" },
+  });
+  await flush(300);
+  expect(ListStreams).toHaveBeenCalledWith("telemetry");
+  await flush();
+  expect(rows()).toHaveLength(1);
+  expect(screen.getByTestId("stream-row-TELEMETRY")).toBeTruthy();
+});
+
+it("passes the filter box input to ListStreams (server-side filter)", async () => {
+  render(
+    <ConfirmProvider>
+      <StreamsPage />
+    </ConfirmProvider>,
+  );
+  await flush();
+  expect(screen.getByTestId("stream-row-ORDERS")).toBeTruthy();
+  expect(ListStreams).toHaveBeenCalledWith("");
+
+  // Typing only flips the debounced hook filter; the binding receives the
+  // query (the unfiltered mock answer still renders all three rows).
+  fireEvent.change(screen.getByLabelText("Search streams"), {
+    target: { value: "orders" },
+  });
+  await flush(300);
+  await flush();
+  expect(ListStreams).toHaveBeenLastCalledWith("orders");
+});
+
+it("shows the truncation banner and slows polling while truncated", async () => {
+  vi.mocked(ListStreams).mockResolvedValue({
+    ...listOk([summary({ name: "cap-s-1", messages: 60 })]),
+    total: 10000,
+    truncated: true,
+  } as never);
   render(
     <ConfirmProvider>
       <StreamsPage />
@@ -274,18 +328,18 @@ it("filters streams by name or subject substring", async () => {
   );
   await flush();
 
-  const input = screen.getByLabelText("Search streams");
-  fireEvent.change(input, { target: { value: "telemetry" } });
+  const banner = screen.getByTestId("streams-truncated-banner");
+  expect(banner.textContent).toContain("Showing first 500 of 10000 streams");
+  expect(banner.textContent).toContain("by message count");
   expect(rows()).toHaveLength(1);
-  expect(screen.getByTestId("stream-row-TELEMETRY")).toBeTruthy();
 
-  fireEvent.change(input, { target: { value: "kv_buck" } });
-  expect(rows()).toHaveLength(1);
-  expect(screen.getByTestId("stream-row-KV_BUCKETS")).toBeTruthy();
-
-  fireEvent.change(input, { target: { value: "zzz-no-match" } });
-  expect(rows()).toHaveLength(0);
-  expect(screen.getByTestId("streams-list-empty")).toBeTruthy();
+  // While truncated the poll re-arms at 6× the base cadence: nothing lands at
+  // 5s, the second tick arrives at 30s (and keeps the unfiltered query).
+  await flush(5_000);
+  expect(ListStreams).toHaveBeenCalledTimes(1);
+  await flush(25_000);
+  expect(ListStreams).toHaveBeenCalledTimes(2);
+  expect(ListStreams).toHaveBeenLastCalledWith("");
 });
 
 it("polls the selected stream detail and switches the rate window", async () => {

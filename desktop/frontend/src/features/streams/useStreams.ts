@@ -26,9 +26,16 @@ import { computeListRates, RateSampler } from "./rates";
  * error_code=validation原文 inline). */
 export interface StreamsApi {
   list: StreamSummary[];
+  /** Pre-cap survivor total from the last list refresh (leak B fix 2). */
+  total: number;
+  /** Server truncated the list to the top-500 messages-desc cap. */
+  truncated: boolean;
   unavailableReason: string;
   loading: boolean;
   refresh: () => void;
+  /** Server-side filter (name/subject substring); setFilter debounces 300ms
+   * and then refetches immediately with the new filter. */
+  setFilter: (value: string) => void;
   selected: string | null;
   select: (name: string | null) => void;
   detail: StreamDetail | null;
@@ -53,6 +60,10 @@ const errText = (err: unknown): string => (err instanceof Error ? err.message : 
  * behavior.poll_interval_seconds (default 5s) while the connection is live and
  * the document is visible (§20.2: hidden pauses, visible resumes immediately).
  *
+ * Leak B fix 2: filtering is server-side (the debounced `setFilter` feeds
+ * `ListStreams(filter)`); the answer carries the pre-cap `total` + `truncated`
+ * marker, and a truncated poll re-arms at 6× the base cadence.
+ *
  * Per refresh the previous list snapshot (kept in a ref) feeds
  * computeListRates for the rate column, and each detail answer is pushed into
  * a per-stream RateSampler for the sparkline. Disconnecting stops the loop and
@@ -64,6 +75,8 @@ export function useStreams(): StreamsApi {
   const connected = conn.state === "connected";
 
   const [list, setList] = useState<StreamSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [truncated, setTruncated] = useState(false);
   const [unavailableReason, setUnavailableReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [rates, setRates] = useState<Map<string, number>>(new Map());
@@ -71,15 +84,22 @@ export function useStreams(): StreamsApi {
   const [detail, setDetail] = useState<StreamDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [rate, setRate] = useState(Number.NaN);
+  // Server-side filter (leak B fix 2): flips only via the debounced setFilter.
+  const [filter, setFilterState] = useState("");
 
   // Poll cadence from settings (default 5s until GetSettings answers); the
   // previous list snapshot + wall-clock anchor for the per-refresh Δt; the
-  // RateSampler accumulates the selected stream's detail samples.
+  // RateSampler accumulates the selected stream's detail samples. truncatedRef
+  // mirrors the `truncated` state for the poll re-arm below — the tick is an
+  // effect closure, state goes stale there (same pattern as intervalMs /
+  // selectedRef); filterTimer backs the 300ms debounce.
   const intervalMs = useRef(5_000);
   const prevSnapshot = useRef(new Map<string, StreamSummary>());
   const lastListAt = useRef(0);
   const sampler = useRef(new RateSampler());
   const selectedRef = useRef<string | null>(null);
+  const truncatedRef = useRef(false);
+  const filterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // §20.2 失焦暂停轮询: visibilitychange gates the poll loop.
   const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
@@ -107,9 +127,12 @@ export function useStreams(): StreamsApi {
   const fetchList = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await ListStreams();
+      const res = await ListStreams(filter);
       const streams = res?.streams ?? [];
       const now = Date.now();
+      truncatedRef.current = res?.truncated ?? false;
+      setTruncated(res?.truncated ?? false);
+      setTotal(res?.total ?? streams.length);
       setUnavailableReason(res?.unavailable_reason ?? "");
       setRates(computeListRates(prevSnapshot.current, streams, now - lastListAt.current));
       prevSnapshot.current = new Map(streams.map((s) => [s.name, s]));
@@ -124,7 +147,25 @@ export function useStreams(): StreamsApi {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, filter]);
+
+  // Server-driven filter box (leak B fix 2): keystrokes debounce 300ms, then
+  // the filter state flip changes fetchList's identity, which restarts the
+  // poll effect below and refetches immediately with the new filter.
+  const setFilter = useCallback((value: string) => {
+    if (filterTimer.current) clearTimeout(filterTimer.current);
+    filterTimer.current = setTimeout(() => {
+      filterTimer.current = null;
+      setFilterState(value);
+    }, 300);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (filterTimer.current) clearTimeout(filterTimer.current);
+    },
+    [],
+  );
 
   const fetchDetail = useCallback(
     async (name: string) => {
@@ -165,7 +206,9 @@ export function useStreams(): StreamsApi {
   );
 
   // The poll loop: one cadence drives list + selected detail. Selection is
-  // read through a ref so changing it does not restart the loop.
+  // read through a ref so changing it does not restart the loop. While the
+  // server reports a truncated (top-500) list the re-arm slows 6× — the
+  // filtered tail cannot come back by polling harder.
   useEffect(() => {
     if (!connected || !visible) return;
     let alive = true;
@@ -175,7 +218,10 @@ export function useStreams(): StreamsApi {
       const sel = selectedRef.current;
       if (sel) await fetchDetail(sel);
       if (!alive) return;
-      timer = setTimeout(() => void tick(), intervalMs.current);
+      timer = setTimeout(
+        () => void tick(),
+        truncatedRef.current ? intervalMs.current * 6 : intervalMs.current,
+      );
     };
     void tick();
     return () => {
@@ -194,10 +240,14 @@ export function useStreams(): StreamsApi {
   }, [selected, connected, fetchDetail]);
 
   // 断连: stop happens via the gated loop above; clear everything so stale
-  // data never masquerades as live.
+  // data never masquerades as live (the filter survives, like the selection —
+  // user intent persists across reconnects).
   useEffect(() => {
     if (connected) return;
     setList([]);
+    setTotal(0);
+    setTruncated(false);
+    truncatedRef.current = false;
     setUnavailableReason("");
     setRates(new Map());
     setDetail(null);
@@ -346,9 +396,12 @@ export function useStreams(): StreamsApi {
 
   return {
     list,
+    total,
+    truncated,
     unavailableReason,
     loading,
     refresh,
+    setFilter,
     selected,
     select,
     detail,

@@ -121,7 +121,9 @@ export function useConsumers(stream: string | null): ConsumersApi {
 
   const fetchStreams = useCallback(async () => {
     try {
-      const res = await ListStreams();
+      // No server-side filter here: the §6.7 stream selector takes the capped,
+      // messages-desc delivery surface as-is (Task 6 registers the revision).
+      const res = await ListStreams("");
       setStreams(res?.streams ?? []);
     } catch (err) {
       toast.error(t("consumers.loadFailed", { error: errText(err) }));

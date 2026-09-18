@@ -30,6 +30,12 @@ export interface StreamListProps {
   rates?: Map<string, number>;
   selected: string | null;
   onSelect: (name: string) => void;
+  /** Pre-cap survivor total from the server (leak B fix 2); shown in the
+   * truncation banner. */
+  total?: number;
+  /** Server delivered only the top-500 messages-desc slice → banner above
+   * the table. */
+  truncated?: boolean;
 }
 
 type SortKey = "name" | "messages" | "bytes" | "last_time";
@@ -49,9 +55,11 @@ function formatTime(ms: number): string {
  * template with the virtual rows, client-side sorting (name/messages/bytes/
  * last_time), KV/object + mirror badges, the rate column fed by
  * computeListRates, and a red replica marker when the stream reports
- * unhealthy replicas. Rows are @tanstack/react-virtual items.
+ * unhealthy replicas. Rows are @tanstack/react-virtual items. With a
+ * truncated server answer (leak B fix 2) a banner above the header states the
+ * honest pre-cap total.
  */
-export function StreamList({ streams, rates, selected, onSelect }: StreamListProps) {
+export function StreamList({ streams, rates, selected, onSelect, total, truncated }: StreamListProps) {
   const { t } = useTranslation();
   const [sort, setSort] = useState<SortState>({ key: "name", desc: false });
   const parentRef = useRef<HTMLDivElement>(null);
@@ -120,6 +128,17 @@ export function StreamList({ streams, rates, selected, onSelect }: StreamListPro
 
   return (
     <div data-testid="streams-table" role="table" className="flex min-h-0 flex-1 flex-col">
+      {/* Leak B fix 2: the server delivered only the top-500 messages-desc
+          slice of `total` matching streams — say so instead of silently
+          hiding the tail. */}
+      {truncated && (
+        <p
+          data-testid="streams-truncated-banner"
+          className="shrink-0 border-b border-border bg-[var(--warn-soft)] px-3 py-1.5 text-xs text-[var(--fg-muted)]"
+        >
+          {t("streams.truncatedBanner", { total: total ?? streams.length })}
+        </p>
+      )}
       {/* Plain grid row sharing GRID_COLS with the virtual body rows — no
           <table>, no separate overflow context, so columns stay aligned. */}
       <div
