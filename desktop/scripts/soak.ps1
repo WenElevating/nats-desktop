@@ -54,7 +54,7 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 # --- paths -------------------------------------------------------------------
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir   = Split-Path -Parent $scriptDir          # desktop/
-$binDir    = Join-Path $repoDir "bin"
+$binDir    = Join-Path $scriptDir "bin"
 $appExe    = Join-Path $binDir "nats-desktop.exe"
 $floodExe  = Join-Path $binDir "flood.exe"
 $samplePs1 = Join-Path $scriptDir "perf-sample.ps1"
@@ -491,7 +491,7 @@ try {
           if (-not $script:lastAxKick -or ($nowKick - $script:lastAxKick).TotalMinutes -ge 10) {
             $script:lastAxKick = $nowKick
             Write-Log ("ax kick: CDP Accessibility.enable after {0} consecutive misses" -f $consecMiss)
-            & node (Join-Path $repoDir "bin\cdp-ax.mjs") 2>&1 | Out-Null
+            & node (Join-Path $scriptDir "bin\cdp-ax.mjs") 2>&1 | Out-Null
           }
         }
       }
