@@ -482,6 +482,18 @@ try {
       } else {
         $navMisses++; $consecMiss++
         Write-Log ("nav cycle {0}: MISS '{1}' (consecutive={2}, total={3})" -f $cycle, $target, $consecMiss, $navMisses)
+        # UIA-bridge auto-revive (2026-09-17 finding, m6-perf §12.5): WebView2's
+        # a11y bridge can go hollow mid-run (E2 16h / E3 24min; renderer AX stays
+        # healthy). A CDP Accessibility.enable kick re-materializes the tree —
+        # verified live. Kick on a 3-miss streak, at most once per 10 min.
+        if ($consecMiss -ge 3 -and $env:NATSDESKTOP_CDP_PORT) {
+          $nowKick = Get-Date
+          if (-not $script:lastAxKick -or ($nowKick - $script:lastAxKick).TotalMinutes -ge 10) {
+            $script:lastAxKick = $nowKick
+            Write-Log ("ax kick: CDP Accessibility.enable after {0} consecutive misses" -f $consecMiss)
+            & node (Join-Path $repoDir "bin\cdp-ax.mjs") 2>&1 | Out-Null
+          }
+        }
       }
       $navIdx = ($navIdx + 1) % $navLabels.Count
       $lastCycleAt = Get-Date
