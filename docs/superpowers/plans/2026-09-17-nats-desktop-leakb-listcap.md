@@ -16,7 +16,8 @@
 - §13.3：不记录任何 payload 内容；列表响应不含消息体。
 - §6.6 语义修订（v1.5 登记）：「读取全部 stream 元信息」保持（Go 侧全量取回，Total 精确）；**交付**改为按消息数降序前 500 + `total`/`truncated`；名称/subject 筛选从客户端过滤改为服务端匹配（对全量数据过滤后封顶），筛选语义（名称、subject 模糊匹配）不变。
 - §6.8 KV：键列表交付前 1000 + `total`/`truncated`，键值内容不上 wire（仅元数据，现状保持）。
-- 有界性原则（泄漏 A/B 教训）：任何 Go→JS 响应不得超过常量上限；轮询在截断状态下自动降频 6×。
+- 有界性原则（泄漏 A/B 教训）：任何 Go→JS 响应不得超过常量上限；**streams 轮询**在截断状态下自动降频 6×（KV 列表为按需拉取，不加节流）。
+- §6.7 修订随 Task 6 登记：消费者页的流选择器交付面与流列表一致（按消息数前 500，服务端筛选可及）。
 - i18n：新增文案键必须 en.json / zh-CN.json 同步（CONTRIBUTING）。
 - CI：go `-race`（本地环境跑不了 -race 时 CI 仲裁）；vitest `--maxWorkers=2`；bindings 提交（`-ts -i -clean=true`，CONTRIBUTING.md:21 已修正）。
 - 收尾验证判据：legE3 型纯导航 1h 跑 browser 斜率 ≤10MB/h（对照 E2 233.7）。
@@ -30,8 +31,9 @@
 - Modify: `desktop/internal/jsadmin/streams_test.go` — cap/sort/filter tests.
 - Modify: `desktop/internal/buckets/kv.go:201` — `ListKeys`: cap + Total/Truncated; `kvListKeysCap` var.
 - Modify: `desktop/internal/buckets/kv_test.go`（或同包现存测试文件）— cap tests.
-- Modify: `desktop/frontend/src/features/streams/useStreams.ts` — filter param, truncated throttle, total state.
-- Modify: `desktop/frontend/src/features/streams/StreamsPage.tsx` + `StreamList.tsx` — server-driven filter box + truncation banner.
+- Modify: `desktop/frontend/src/features/streams/useStreams.ts` — filter param, truncated throttle (truncatedRef, mirroring intervalMs/selectedRef), total state.
+- Modify: `desktop/frontend/src/features/streams/StreamsPage.tsx` + `StreamList.tsx` — server-driven filter box (delete client-side `matchStreams`) + truncation banner.
+- Modify: `desktop/frontend/src/features/consumers/useConsumers.ts:124` — `ListStreams("")`（签名变更的唯一其他前端调用方；消费者流选择器随封顶变为「按消息数前 500」，§6.7 修订随 Task 6 登记）。
 - Modify: `desktop/frontend/src/features/kv/useKv.ts` + `KeyList.tsx`（或 KeyValuePage.tsx）— truncation banner.
 - Modify: `desktop/frontend/src/locales/en.json` + `zh-CN.json` — new keys（两边同步）.
 - Modify: `desktop/frontend/tests/streams-page.test.tsx`, `kv-page.test.tsx` — mocks gain total/truncated; banner/throttle tests.
@@ -58,19 +60,25 @@
 Append to `desktop/internal/jsadmin/streams_test.go` (reuse the file's existing LocalServer stream-creation helper; create streams with distinct message counts and names):
 
 ```go
+// TestListStreamsCapSortFilter uses a FRESH per-test server (newAdmin +
+// testutil.StartJSServer, same fixture as TestStreamLifecycle) so exact totals
+// and fixed names are valid — the shared 4333 server carries the 10k-stream
+// Task-6 dataset and other tests' debris.
 func TestListStreamsCapSortFilter(t *testing.T) {
-	requireLocalServer(t)
-	svc := newJetAdminService(t) // 本文件既有的构造 helper；名字不同则照抄既有测试的构造段
-	// 7 streams: msg counts 0/10/20/.../60, names s-0..s-6, subjects ["sN.>"]
+	svc := newAdmin(t, testutil.StartJSServer(t))
+	// 7 streams: msg counts 0/10/.../60, names cap-s-0..cap-s-6, subjects ["cap-s-N.>"]
 	for i := 0; i < 7; i++ {
 		name := fmt.Sprintf("cap-s-%d", i)
-		if _, err := svc.CreateStream(StreamForm{
+		if res := svc.CreateStream(StreamForm{
 			Name: name, Subjects: []string{fmt.Sprintf("cap-s-%d.>", i)},
 			Storage: "file", Retention: "limits",
-		}); !res.Ok() { /* 按既有测试的断言风格写 */ }
-		// publish i*10 msgs（用既有 publish helper；与同文件其它测试一致）
+		}); !res.Ok() {
+			t.Fatalf("create %s: %+v", name, res)
+		}
+		// publish i*10 msgs（照抄同文件既有测试的 publish 写法，如 svc.Publish(PubForm{...})）
 	}
-	svc.listStreamsCap = 5 // 包级 var，测试缩容
+	listStreamsCap = 5 // 包级 var，测试缩容（直接赋值，非 svc 字段）
+	t.Cleanup(func() { listStreamsCap = 500 })
 	res := svc.ListStreams("")
 	if !res.Ok() { t.Fatalf("ListStreams: %+v", res) }
 	if !res.Truncated || res.Total != 7 {
@@ -91,7 +99,7 @@ func TestListStreamsCapSortFilter(t *testing.T) {
 }
 ```
 
-（按文件内既有 helper 的真名落笔：若流创建/publish 用的是 `svc.CreateStream` 返回 `CallResult`、publish 走 `svc.Publish` 或直接 nats 发布，逐字沿用同文件既有测试写法。）
+（若本包 helper 真名与上面不同——如 `newAdminConn`——以同文件 `TestStreamLifecycle`（streams_test.go:137-144）的构造段逐字为准。）
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -160,10 +168,11 @@ func (s *JetAdminService) ListStreams(filter string) ListStreamsResult {
 		return all[i].Name < all[j].Name
 	})
 	truncated := len(all) > listStreamsCap
+	total := len(all) // 截断前的存活总数（Total 语义）
 	if truncated {
 		all = all[:listStreamsCap]
 	}
-	return ListStreamsResult{Streams: all, Total: len(all), Truncated: truncated}
+	return ListStreamsResult{Streams: all, Total: total, Truncated: truncated}
 }
 
 // streamMatchesFilter: §6.6 名称/subject 模糊匹配（大小写不敏感的子串）。
@@ -180,7 +189,9 @@ func streamMatchesFilter(s StreamSummary, f string) bool {
 }
 ```
 
-（imports 视需要补 `sort`、`strings`；`Total` 赋值注意在截断前取 `len(all)`——按上面代码顺序即可。**修正**：`Total` 必须是截断前的存活总数，即 `total := len(all)` 在截断前赋值。）
+（imports 视需要补 `sort`、`strings`。）
+
+**Go 调用点清单（签名变更波及，全部传 `""`，`cleanupStreams` 传其 suffix 作为筛选）**：`streams_test.go` 既有用例、`backup_test.go:402`、`perf_test.go:42,130,149,155`（`cleanupStreams` 用 suffix 过滤以在共享服务器上精确清理 PERF* 残留）、`stress_test.go:72`。前端调用方恰两处：`useStreams.ts:110`（Task 3）与 `useConsumers.ts:124`（传 `""`，见 File Structure）。
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -209,7 +220,22 @@ git commit -m "feat(jsadmin): ListStreams server-side filter + messages-desc sor
 
 - [ ] **Step 2: Verify fail**（compile error: Truncated undefined）
 
-- [ ] **Step 3: Implement** — watcher 循环里 `if len(keys) >= kvListKeysCap { truncated = true; break }`（注意：提前跳出必须照常 `Stop()` watcher，且因哨兵未到，此处 **不算**「部分伪装成功」——截断是显式字段而非错误）；循环后 `total := len(keys)` 记录（截断时 Total=已读数不等于真实总数——**改为**：MetaOnly watcher 无法预知总数，Total 语义=「已读到的键数」，截断时前端文案用「前 1000 键（更多未列出）」，不用具体总数）。
+- [ ] **Step 3: Implement** — watcher 循环内**顺序固定**（正好 1000 键时必须 truncated=false）：先哨兵判断、再封顶判断（append 之前）、最后 append：
+
+```go
+	for e := range watcher.Updates() {
+		if e == nil { // 初始快照完成哨兵
+			break
+		}
+		if len(keys) >= kvListKeysCap { // append 前判断：还能读到下一条 → 确有更多
+			truncated = true
+			break
+		}
+		keys = append(keys, BuildKeyMeta(e))
+	}
+```
+
+（`kvListKeysCap` 为包级 var=1000，测试缩容直接 `kvListKeysCap = 5`。提前跳出时 `ctx.Err()` 为 nil，不会被误判为超时；`watcher.Stop()` 由既有 defer 保证执行。Total 语义：MetaOnly watcher 无法预知总数，截断时 Total=已读键数，前端文案「前 1000 个键（更多未列出）」不引用具体总数。）
 
 - [ ] **Step 4: Verify pass** + 全包回归
 
@@ -249,12 +275,14 @@ it("passes the filter box input to ListStreams (server-side filter)", async () =
 });
 ```
 
-（mock 的 `ok`/`stream()` helper 照抄该文件既有定义；placeholder 文案按现有筛选框实际 i18n 键改断言。）
+（mock 的 `ok`/`stream()` helper 照抄该文件既有定义；筛选框 placeholder 用真实 i18n 键 `streams.search`（"Search streams"）断言。）
+
+**既有用例重写**（必做）：`streams-page.test.tsx:262-277` 的 "filters streams by name or subject substring" 是纯客户端过滤断言（`fireEvent.change` 后同步断言行数，走 `matchStreams`）——改为：mock `ListStreams` 按筛选值返回对应子集，`fireEvent.change(searchInput, "telemetry")` 后 `await waitFor(() => expect(ListStreams).toHaveBeenCalledWith("telemetry"))`，并等待去抖重取后的行渲染。
 
 - [ ] **Step 2: Verify fail** → **Step 3: Implement**:
-  - useStreams: `const [filter, setFilter] = useState("")`; `fetchList` calls `ListStreams(filter)`; 存 `total/truncated` state；轮询 interval：`truncated ? intervalMs.current * 6 : intervalMs.current`；暴露 `setFilter`（内部 300ms debounce 后立即 fetchList + 重置轮询计时）。
-  - StreamsPage: 筛选框 onChange → `setFilter(value)`（去客户端过滤，改服务端）。
-  - StreamList: `truncated` 时头部渲染 banner：en `"Showing first 500 of {total} streams (by message count)"` / zh `"显示前 500 条流（共 {total}，按消息数排序）"`；i18n 键 `streams.truncatedBanner`（两 locale 同步加）。
+  - useStreams: `const [filter, setFilter] = useState("")`; `fetchList` calls `ListStreams(filter)`; `total` 存 state、`truncated` 存 **ref**（`truncatedRef`——轮询 tick 是 effect 闭包，state 会过期；照 `intervalMs`/`selectedRef` 的既有模式，在 fetchList 内更新），setTimeout 重臂处读 `truncatedRef.current ? intervalMs.current * 6 : intervalMs.current`；暴露 debounced `setFilter`（300ms debounce 后立即 fetchList）。
+  - StreamsPage: 筛选框 onChange → `setFilter(value)`（去客户端过滤，改服务端）；**删除 `matchStreams`**（StreamsPage.tsx:18-26，导出函数，变死代码）。
+  - StreamList: `truncated` 时头部渲染 banner：en `"Showing first 500 of {{total}} streams (by message count)"` / zh `"显示前 500 条流（共 {{total}}，按消息数排序）"`；i18n 键 `streams.truncatedBanner`（i18next 双花括号插值；两 locale 同步加）。
 - [ ] **Step 4: Verify pass** + 全套件 `npx vitest run --maxWorkers=2`
 - [ ] **Step 5: Commit** `feat(frontend): server-driven stream filter + truncation banner + throttled polling (leak B fix 2, part 3)`
 
@@ -281,4 +309,6 @@ it("passes the filter box input to ListStreams (server-side filter)", async () =
 
 - legE3 型纯导航 1h 复跑（复用 `bin/legE3.sh`，OutDir 改 `legE3-postfix`）：判据 browser 斜率较 E2 233.7 显著崩塌（目标 ≤10MB/h；若仅部分下降，按页分解腿继续归因并如实记录）。
 - m6-perf §12.5 回填 + spec v1.5 版本行 + §6.6/§6.8 修订（列表封顶语义）+ 台账。
+- useConsumers.ts:124 改 `ListStreams("")` 后，`tests/consumers-page.test.tsx` 的 mock（`ListStreams: vi.fn()`）忽略参数，无需改断言；如 tsc 报错按 `vi.mocked(ListStreams).mockResolvedValue(...)` 既有形状补 `total/truncated` 字段。
+- spec v1.5 修订必须含 **§6.7**：消费者页流选择器交付面与流列表一致（按消息数前 500、服务端筛选可及）。
 - Commit + push。
