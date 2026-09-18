@@ -205,6 +205,15 @@ func main() {
 		opts.Windows.AdditionalBrowserArgs = append(opts.Windows.AdditionalBrowserArgs, "--remote-debugging-port="+port)
 	}
 
+	// Accessibility lever (automation, test-only): NATSDESKTOP_FORCE_AX=1 appends
+	// --force-renderer-accessibility. WebView2's UIA-triggered accessibility
+	// auto-activation proved unreliable on this machine (2026-09-17: renderer AX
+	// healthy via CDP, UIA tree hollow until a CDP Accessibility.enable kick —
+	// m6-perf §12.4), which hollows the automation tree the soak harness drives.
+	if os.Getenv("NATSDESKTOP_FORCE_AX") == "1" {
+		opts.Windows.AdditionalBrowserArgs = append(opts.Windows.AdditionalBrowserArgs, "--force-renderer-accessibility")
+	}
+
 	app := application.New(opts)
 
 	// Single main window hosting the app shell (sidebar + page content).
