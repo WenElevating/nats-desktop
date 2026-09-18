@@ -54,7 +54,7 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 # --- paths -------------------------------------------------------------------
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir   = Split-Path -Parent $scriptDir          # desktop/
-$binDir    = Join-Path $scriptDir "bin"
+$binDir    = Join-Path $repoDir "bin"
 $appExe    = Join-Path $binDir "nats-desktop.exe"
 $floodExe  = Join-Path $binDir "flood.exe"
 $samplePs1 = Join-Path $scriptDir "perf-sample.ps1"
